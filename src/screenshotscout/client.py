@@ -10,7 +10,7 @@ import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from types import TracebackType
-from typing import Self, TypeAlias
+from typing import Self, TypeAlias, cast
 
 import httpx
 
@@ -41,12 +41,24 @@ _ACCESS_KEY_PATTERN = re.compile(r"[A-Za-z0-9\-._~+/]+=*")
 RequestTimeout: TypeAlias = float | httpx.Timeout | None
 
 
+class _RequestTimeoutDefault:
+    __slots__ = ()
+
+    def __repr__(self) -> str:
+        return "<default>"
+
+
+_REQUEST_TIMEOUT_UNSET = _RequestTimeoutDefault()
+_REQUEST_TIMEOUT_DEFAULT = cast(RequestTimeout, _REQUEST_TIMEOUT_UNSET)
+
+
 @dataclass(frozen=True, slots=True)
 class _ClientConfiguration:
     access_key: str
     secret_key: str | None
     endpoint: str
     request_timeout: RequestTimeout
+    use_client_default_timeout: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,7 +81,7 @@ class ScreenshotScoutClient:
         *,
         secret_key: str | None = None,
         base_url: str = _DEFAULT_BASE_URL,
-        request_timeout: RequestTimeout = None,
+        request_timeout: RequestTimeout = _REQUEST_TIMEOUT_DEFAULT,
         http_client: httpx.Client | None = None,
     ) -> None:
         self._configuration = _build_configuration(
@@ -104,6 +116,11 @@ class ScreenshotScoutClient:
 
         self._ensure_open()
         prepared = _prepare_request(self._configuration, target_url, options, method)
+        httpx_request_timeout = (
+            httpx.USE_CLIENT_DEFAULT
+            if self._configuration.use_client_default_timeout
+            else self._configuration.request_timeout
+        )
         try:
             response = self._http_client.request(
                 prepared.method.value,
@@ -111,7 +128,7 @@ class ScreenshotScoutClient:
                 headers=prepared.headers,
                 content=prepared.content,
                 follow_redirects=False,
-                timeout=self._configuration.request_timeout,
+                timeout=httpx_request_timeout,
             )
             body = response.read()
         except Exception as cause:
@@ -174,7 +191,7 @@ class AsyncScreenshotScoutClient:
         *,
         secret_key: str | None = None,
         base_url: str = _DEFAULT_BASE_URL,
-        request_timeout: RequestTimeout = None,
+        request_timeout: RequestTimeout = _REQUEST_TIMEOUT_DEFAULT,
         http_client: httpx.AsyncClient | None = None,
     ) -> None:
         self._configuration = _build_configuration(
@@ -209,6 +226,11 @@ class AsyncScreenshotScoutClient:
 
         self._ensure_open()
         prepared = _prepare_request(self._configuration, target_url, options, method)
+        httpx_request_timeout = (
+            httpx.USE_CLIENT_DEFAULT
+            if self._configuration.use_client_default_timeout
+            else self._configuration.request_timeout
+        )
         try:
             response = await self._http_client.request(
                 prepared.method.value,
@@ -216,7 +238,7 @@ class AsyncScreenshotScoutClient:
                 headers=prepared.headers,
                 content=prepared.content,
                 follow_redirects=False,
-                timeout=self._configuration.request_timeout,
+                timeout=httpx_request_timeout,
             )
             body = await response.aread()
         except asyncio.CancelledError:
@@ -291,7 +313,12 @@ def _build_configuration(
         )
 
     endpoint = _capture_endpoint(base_url)
-    timeout = _validate_request_timeout(request_timeout)
+    if request_timeout is _REQUEST_TIMEOUT_UNSET:
+        timeout = None
+        use_client_default_timeout = True
+    else:
+        timeout = _validate_request_timeout(request_timeout)
+        use_client_default_timeout = False
     try:
         httpx.Headers({"Authorization": f"Bearer {access_key}"})
     except (TypeError, ValueError) as cause:
@@ -305,6 +332,7 @@ def _build_configuration(
         secret_key=secret_key,
         endpoint=endpoint,
         request_timeout=timeout,
+        use_client_default_timeout=use_client_default_timeout,
     )
 
 

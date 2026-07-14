@@ -58,7 +58,7 @@ def serialize_capture_options(
     if options is None:
         return SerializedCaptureOptions(tuple(pairs), body)
 
-    for option_field in fields(options):
+    for option_field in fields(CaptureOptions):
         option = option_field.name
         value: object = getattr(options, option)
         if value is None:

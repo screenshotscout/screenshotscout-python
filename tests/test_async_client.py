@@ -158,3 +158,43 @@ async def test_injected_async_http_client_truth_value_is_not_evaluated() -> None
         await client.aclose()
 
         assert not http_client.is_closed
+
+
+@pytest.mark.asyncio
+async def test_injected_async_client_timeout_inheritance_and_explicit_disable() -> None:
+    requests: list[httpx.Request] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, content=b"image", headers={"content-type": "image/png"})
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler),
+        timeout=7.0,
+    ) as http_client:
+        inherited_client = AsyncScreenshotScoutClient("key", http_client=http_client)
+        await inherited_client.capture("https://example.com")
+        await inherited_client.aclose()
+
+        timeout_free_client = AsyncScreenshotScoutClient(
+            "key",
+            request_timeout=None,
+            http_client=http_client,
+        )
+        await timeout_free_client.capture("https://example.com")
+        await timeout_free_client.aclose()
+
+    inherited_timeout = cast(dict[str, float | None], requests[0].extensions["timeout"])
+    disabled_timeout = cast(dict[str, float | None], requests[1].extensions["timeout"])
+    assert inherited_timeout == {
+        "connect": 7.0,
+        "read": 7.0,
+        "write": 7.0,
+        "pool": 7.0,
+    }
+    assert disabled_timeout == {
+        "connect": None,
+        "read": None,
+        "write": None,
+        "pool": None,
+    }

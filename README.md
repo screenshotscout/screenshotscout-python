@@ -122,8 +122,9 @@ client = ScreenshotScoutClient(
 - `secret_key` is optional. When supplied, capture requests and generated capture URLs include an
   HMAC-SHA256 signature.
 - `base_url` defaults to `https://api.screenshotscout.com`; `/v1/capture` is appended to it.
-- `request_timeout` controls the HTTPX transport timeout. A positive number applies one timeout value,
-  an `httpx.Timeout` supports per-phase values, and `None` disables the HTTPX timeout.
+- By default, SDK-created clients have no HTTP timeout. An injected HTTPX client keeps its configured
+  timeout. Set `request_timeout` to a positive number or `httpx.Timeout` to override it, or pass
+  `None` to disable it explicitly.
 - `http_client` accepts an `httpx.Client` for the blocking SDK or an `httpx.AsyncClient` for the
   async-I/O SDK. An injected client is never closed by the SDK; a client created internally is
   closed by `close()`, `aclose()`, or the corresponding context manager.

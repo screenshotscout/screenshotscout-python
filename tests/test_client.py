@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any, cast
 from urllib.parse import parse_qsl, urlsplit
 
@@ -102,6 +103,42 @@ def test_injected_http_client_truth_value_is_not_evaluated() -> None:
         client.close()
 
         assert not http_client.is_closed
+
+
+def test_injected_http_client_timeout_inheritance_and_explicit_disable() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return _default_response(request)
+
+    with httpx.Client(transport=httpx.MockTransport(handler), timeout=7.0) as http_client:
+        inherited_client = ScreenshotScoutClient("key", http_client=http_client)
+        inherited_client.capture("https://example.com")
+        inherited_client.close()
+
+        timeout_free_client = ScreenshotScoutClient(
+            "key",
+            request_timeout=None,
+            http_client=http_client,
+        )
+        timeout_free_client.capture("https://example.com")
+        timeout_free_client.close()
+
+    inherited_timeout = cast(dict[str, float | None], requests[0].extensions["timeout"])
+    disabled_timeout = cast(dict[str, float | None], requests[1].extensions["timeout"])
+    assert inherited_timeout == {
+        "connect": 7.0,
+        "read": 7.0,
+        "write": 7.0,
+        "pool": 7.0,
+    }
+    assert disabled_timeout == {
+        "connect": None,
+        "read": None,
+        "write": None,
+        "pool": None,
+    }
 
 
 def test_post_is_default_and_serializes_complete_option_surface() -> None:
@@ -258,6 +295,28 @@ def test_post_is_default_and_serializes_complete_option_surface() -> None:
         "storage_bucket": "",
         "storage_region": "",
         "storage_object_key": "",
+    }
+
+
+def test_capture_options_subclass_fields_are_not_serialized() -> None:
+    @dataclass(slots=True, kw_only=True)
+    class ExtendedCaptureOptions(CaptureOptions):
+        local_note: str | None = None
+
+    http_client, requests = _recording_http_client()
+    try:
+        client = ScreenshotScoutClient("key", http_client=http_client)
+        client.capture(
+            "https://example.com",
+            ExtendedCaptureOptions(full_page=False, local_note="local only"),
+        )
+        client.close()
+    finally:
+        http_client.close()
+
+    assert _json_request_body(requests[0]) == {
+        "url": "https://example.com",
+        "full_page": False,
     }
 
 
