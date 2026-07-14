@@ -1,8 +1,7 @@
 # Screenshot Scout Python SDK
 
-The official Python SDK for the [Screenshot Scout](https://screenshotscout.com) screenshot API.
-It provides typed blocking and async-I/O clients, exact GET and POST request serialization,
-optional request signing, and access to both decoded results and the original buffered HTTP response.
+The official Python SDK for the [Screenshot Scout](https://screenshotscout.com/) screenshot API.
+Easily capture website screenshots from your Python applications.
 
 ## Requirements
 
@@ -14,35 +13,53 @@ Python 3.11 or newer.
 python -m pip install screenshotscout
 ```
 
-## Quick start
+## Get your API credentials
 
-Pass credentials to the client explicitly. The SDK does not read environment variables on its own.
+Before using the SDK, [sign up for Screenshot Scout](https://screenshotscout.com/) or sign in to
+your existing account. Screenshot Scout automatically creates a default API key when you sign up.
+
+Open the [API Keys page](https://screenshotscout.com/app/api-keys), copy the access key and secret
+key, and store them securely. The access key is required when creating `ScreenshotScoutClient` or
+`AsyncScreenshotScoutClient`. The secret key is optional and enables
+[signed requests](#signed-requests).
+
+## Capture a screenshot
+
+Read your access key from an environment variable and pass it to the client:
 
 ```python
 import os
 from pathlib import Path
 
-from screenshotscout import BinaryCaptureResponse, CaptureFormat, CaptureOptions, ScreenshotScoutClient
+from screenshotscout import (
+    BinaryCaptureResponse,
+    CaptureFormat,
+    CaptureOptions,
+    ScreenshotScoutClient,
+)
 
-with ScreenshotScoutClient(os.environ["SCREENSHOTSCOUT_ACCESS_KEY"]) as client:
+access_key = os.environ.get("SCREENSHOTSCOUT_ACCESS_KEY")
+if not access_key:
+    raise RuntimeError("Set SCREENSHOTSCOUT_ACCESS_KEY first.")
+
+with ScreenshotScoutClient(access_key) as client:
     response = client.capture(
         "https://example.com",
-        CaptureOptions(format=CaptureFormat.PNG, full_page=True),
+        CaptureOptions(format=CaptureFormat.WEBP, full_page=True),
     )
 
 if not isinstance(response, BinaryCaptureResponse):
     raise RuntimeError("Expected a binary capture response")
 
-Path("screenshot.png").write_bytes(response.bytes)
+Path("screenshot.webp").write_bytes(response.bytes)
 ```
 
-`capture()` uses POST by default. It buffers the response body before returning, so the result remains
-usable after the client is closed.
+POST is used by default. The screenshot is available as `response.bytes`.
 
-## JSON responses
+## Request a JSON result
 
-Request a JSON result when you want Screenshot Scout to return capture metadata instead of the binary
-file directly:
+Set `response_type` to `CaptureResponseType.JSON` to receive screenshot metadata instead of the
+binary file:
 
 ```python
 import os
@@ -50,15 +67,11 @@ import os
 from screenshotscout import (
     CaptureOptions,
     CaptureResponseType,
-    CaptureStorageMode,
     JsonCaptureResponse,
     ScreenshotScoutClient,
 )
 
-options = CaptureOptions(
-    response_type=CaptureResponseType.JSON,
-    storage_mode=CaptureStorageMode.MANAGED,
-)
+options = CaptureOptions(response_type=CaptureResponseType.JSON)
 
 with ScreenshotScoutClient(os.environ["SCREENSHOTSCOUT_ACCESS_KEY"]) as client:
     response = client.capture("https://example.com", options)
@@ -67,18 +80,12 @@ if not isinstance(response, JsonCaptureResponse):
     raise RuntimeError("Expected a JSON capture response")
 
 print(response.result.screenshot_url)
-print(response.result.screenshot_url_expires_at)
-print(response.result.cache_status)
 ```
 
-Unrecognized JSON result properties are retained in `response.result.additional_fields`.
+## Async client
 
-## Async Python client (inline response)
-
-`AsyncScreenshotScoutClient` uses non-blocking Python and HTTPX I/O. `await capture()` still waits
-for the final inline Screenshot Scout response; it does not submit a background screenshot job or
-use webhooks. The client otherwise has the same capture and URL-building behavior as the blocking
-client, and task cancellation is propagated unchanged.
+Use `AsyncScreenshotScoutClient` in applications that use `asyncio`. `await capture()` waits for
+and returns the completed capture; it does not create a background job.
 
 ```python
 import asyncio
@@ -101,40 +108,9 @@ async def main() -> None:
 asyncio.run(main())
 ```
 
-## Client configuration
+## Use GET
 
-```python
-import httpx
-
-from screenshotscout import ScreenshotScoutClient
-
-transport = httpx.Client()
-client = ScreenshotScoutClient(
-    "access_key",
-    secret_key="secret_key",
-    base_url="https://api.screenshotscout.com",
-    request_timeout=httpx.Timeout(30.0, connect=10.0),
-    http_client=transport,
-)
-```
-
-- `access_key` is required and is sent as a Bearer credential for executed requests.
-- `secret_key` is optional. When supplied, capture requests and generated capture URLs include an
-  HMAC-SHA256 signature.
-- `base_url` defaults to `https://api.screenshotscout.com`; `/v1/capture` is appended to it.
-- By default, SDK-created clients have no HTTP timeout. An injected HTTPX client keeps its configured
-  timeout. Set `request_timeout` to a positive number or `httpx.Timeout` to override it, or pass
-  `None` to disable it explicitly.
-- `http_client` accepts an `httpx.Client` for the blocking SDK or an `httpx.AsyncClient` for the
-  async-I/O SDK. An injected client is never closed by the SDK; a client created internally is
-  closed by `close()`, `aclose()`, or the corresponding context manager.
-
-`CaptureOptions.timeout` and `CaptureOptions.navigation_timeout` are Screenshot Scout service
-options. They are separate from the client-side `request_timeout` setting.
-
-## GET requests and capture URLs
-
-Use the closed `CaptureHTTPMethod` enum to execute a GET request:
+POST is the default. Pass `CaptureHTTPMethod.GET` when you need a GET request:
 
 ```python
 from screenshotscout import CaptureHTTPMethod
@@ -145,23 +121,48 @@ response = client.capture(
 )
 ```
 
-Executed GET and POST requests authenticate with the `Authorization` header. To create a capture URL
-that can be used without that header, call `build_capture_url()`:
+## Build a capture URL
+
+Use `build_capture_url()` when a browser, an HTML `<img>` element, or another application needs to
+load the screenshot directly. Building the URL does not make a request.
 
 ```python
-capture_url = client.build_capture_url("https://example.com")
+from screenshotscout import CaptureOptions
+
+capture_url = client.build_capture_url(
+    "https://example.com",
+    CaptureOptions(full_page=True, block_ads=True),
+)
 ```
 
-The generated URL contains the access key and may contain a signature. Treat it as sensitive: avoid
-logging it, committing it, or exposing it to unintended recipients. Building a URL does not make a
-network request.
+The generated URL contains your access key. If the client has a secret key, the URL is signed
+automatically; otherwise, it is unsigned. Treat generated URLs as sensitive. Before exposing one
+to a browser or user, add your secret key to the client and enable **Require signed requests** on
+the [API Keys page](https://screenshotscout.com/app/api-keys).
+
+## Signed requests
+
+Pass your secret key to sign GET and POST requests and generated capture URLs automatically. The
+secret key stays in your application and is never transmitted.
+
+```python
+import os
+
+from screenshotscout import ScreenshotScoutClient
+
+with ScreenshotScoutClient(
+    os.environ["SCREENSHOTSCOUT_ACCESS_KEY"],
+    secret_key=os.environ["SCREENSHOTSCOUT_SECRET_KEY"],
+) as client:
+    response = client.capture("https://example.com")
+```
+
+See the [signed requests guide](https://screenshotscout.com/docs/signed-requests) for details.
 
 ## Capture options
 
-Construct options with keyword arguments. `None` values and empty repeated values are omitted;
-booleans, zero, and non-empty strings are preserved. Repeated options accept sequences and retain
-their order. The SDK performs only structural serialization checks and leaves Screenshot Scout's
-service semantics, defaults, and future string values to the API.
+The target URL is the first argument to `capture()`. Use `CaptureOptions` keyword arguments to
+customize the screenshot:
 
 | Area | `CaptureOptions` fields |
 |---|---|
@@ -180,49 +181,74 @@ service semantics, defaults, and future string values to the API.
 | Caching | `cache`, `cache_ttl`, `cache_key` |
 | Storage | `storage_mode`, `storage_endpoint`, `storage_bucket`, `storage_region`, `storage_object_key` |
 
-The SDK provides discoverable constants for documented service values:
+Use the provided constants for autocomplete, or pass a string:
 
-- `CaptureFormat`
-- `CaptureResponseType`
-- `CaptureWaitUntil`
-- `CaptureMediaType`
-- `CaptureColorScheme`
-- `CaptureImageMode`
-- `CaptureImageAnchor`
-- `CapturePdfPaperFormat`
-- `CaptureStorageMode`
+```python
+from screenshotscout import CaptureFormat, CaptureOptions, CaptureWaitUntil
 
-These constants are strings, so raw strings remain supported for forward compatibility.
+options = CaptureOptions(
+    format=CaptureFormat.WEBP,
+    wait_until=CaptureWaitUntil.LOAD,
+)
+response = client.capture("https://example.com", options)
+```
 
-## Responses and raw HTTP data
+See the [screenshot option reference](https://screenshotscout.com/docs/screenshot-options) for
+available values and examples.
 
-Successful calls return one of two frozen response models:
+## Timeouts
 
-- `BinaryCaptureResponse` exposes `bytes` and the documented screenshot URL, expiry, and cache-status
-  response headers when present.
-- `JsonCaptureResponse` exposes a typed `CaptureResult` and preserves additional result fields.
+```python
+import os
 
-Both variants expose `raw_response`, which contains the status, reason phrase, multi-value headers,
-content type, and exact buffered body. The `kind` discriminator is `"binary"` or `"json"`.
+from screenshotscout import CaptureOptions, ScreenshotScoutClient
 
-The SDK verifies that the successful response media type matches the requested response representation.
+with ScreenshotScoutClient(
+    os.environ["SCREENSHOTSCOUT_ACCESS_KEY"],
+    request_timeout=300.0,
+) as client:
+    response = client.capture(
+        "https://example.com",
+        CaptureOptions(timeout=180),
+    )
+```
 
-## Errors
+`CaptureOptions.timeout` controls how long Screenshot Scout may spend capturing the page.
+`request_timeout` controls how long your application waits for the API response.
 
-All SDK-defined errors derive from `ScreenshotScoutError`:
+## Responses
 
-- `ScreenshotScoutConfigurationError` — unusable credentials, base URL, timeout, client type, or a
-  closed SDK client.
-- `ScreenshotScoutSerializationError` — a request value cannot be represented safely on the wire.
-- `ScreenshotScoutTransportError` — HTTPX failed before a complete response was received; the original
-  exception is available as `cause`.
-- `ScreenshotScoutAPIError` — the API returned a non-2xx response; parsed error fields and the exact
-  `raw_response` are retained.
-- `ScreenshotScoutResponseDecodingError` — a successful response has an incompatible media type or
-  cannot be decoded as requested; `raw_response` is retained.
+- `BinaryCaptureResponse` provides the screenshot as `bytes`, along with URL, expiry, and cache
+  information when available.
+- `JsonCaptureResponse` provides screenshot metadata in `result`.
 
-The SDK sends one request per `capture()` call. It does not retry, follow redirects, switch methods, or
-normalize service option values.
+Both response types include `raw_response` for access to the HTTP status, headers, content type,
+and body.
+
+## Error handling
+
+```python
+import os
+
+from screenshotscout import (
+    ScreenshotScoutAPIError,
+    ScreenshotScoutClient,
+    ScreenshotScoutError,
+    ScreenshotScoutTransportError,
+)
+
+try:
+    with ScreenshotScoutClient(os.environ["SCREENSHOTSCOUT_ACCESS_KEY"]) as client:
+        response = client.capture("https://example.com")
+except ScreenshotScoutAPIError as error:
+    print(error.status, error.error_code, error.error_message)
+except ScreenshotScoutTransportError as error:
+    print(error.cause)
+except ScreenshotScoutError as error:
+    print(error)
+```
+
+The SDK does not automatically retry failed requests.
 
 ## Examples
 
