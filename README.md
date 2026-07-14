@@ -15,7 +15,7 @@ python -m pip install screenshotscout
 
 ## Get your API credentials
 
-Before using the SDK, [sign up for Screenshot Scout](https://screenshotscout.com/) or sign in to
+Before using the SDK, [sign up for Screenshot Scout](https://screenshotscout.com/auth/signup) or sign in to
 your existing account. Screenshot Scout automatically creates a default API key when you sign up.
 
 Open the [API Keys page](https://screenshotscout.com/app/api-keys), copy the access key and secret
