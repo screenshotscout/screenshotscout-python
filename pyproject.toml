@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "screenshotscout"
-version = "0.1.0rc1"
+version = "0.1.0"
 description = "Official Python SDK for the Screenshot Scout screenshot API."
 readme = "README.md"
 requires-python = ">=3.11"
