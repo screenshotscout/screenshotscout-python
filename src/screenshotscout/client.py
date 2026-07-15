@@ -5,12 +5,11 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import hmac
-import math
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from types import TracebackType
-from typing import Self, TypeAlias, cast
+from typing import Self
 
 import httpx
 
@@ -36,29 +35,14 @@ from .errors import (
 )
 from .models import CaptureHTTPMethod, CaptureOptions, CaptureResponse
 
-_DEFAULT_BASE_URL = "https://api.screenshotscout.com"
+_CAPTURE_ENDPOINT = "https://api.screenshotscout.com/v1/capture"
 _ACCESS_KEY_PATTERN = re.compile(r"[A-Za-z0-9\-._~+/]+=*")
-RequestTimeout: TypeAlias = float | httpx.Timeout | None
-
-
-class _RequestTimeoutDefault:
-    __slots__ = ()
-
-    def __repr__(self) -> str:
-        return "<default>"
-
-
-_REQUEST_TIMEOUT_UNSET = _RequestTimeoutDefault()
-_REQUEST_TIMEOUT_DEFAULT = cast(RequestTimeout, _REQUEST_TIMEOUT_UNSET)
 
 
 @dataclass(frozen=True, slots=True)
 class _ClientConfiguration:
     access_key: str
     secret_key: str | None
-    endpoint: str
-    request_timeout: RequestTimeout
-    use_client_default_timeout: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,15 +64,11 @@ class ScreenshotScoutClient:
         access_key: str,
         *,
         secret_key: str | None = None,
-        base_url: str = _DEFAULT_BASE_URL,
-        request_timeout: RequestTimeout = _REQUEST_TIMEOUT_DEFAULT,
         http_client: httpx.Client | None = None,
     ) -> None:
         self._configuration = _build_configuration(
             access_key=access_key,
             secret_key=secret_key,
-            base_url=base_url,
-            request_timeout=request_timeout,
         )
         if http_client is not None and not isinstance(http_client, httpx.Client):
             raise ScreenshotScoutConfigurationError(
@@ -100,7 +80,7 @@ class ScreenshotScoutClient:
             if http_client is not None
             else httpx.Client(
                 follow_redirects=False,
-                timeout=self._configuration.request_timeout,
+                timeout=None,
             )
         )
         self._closed = False
@@ -116,11 +96,6 @@ class ScreenshotScoutClient:
 
         self._ensure_open()
         prepared = _prepare_request(self._configuration, target_url, options, method)
-        httpx_request_timeout = (
-            httpx.USE_CLIENT_DEFAULT
-            if self._configuration.use_client_default_timeout
-            else self._configuration.request_timeout
-        )
         try:
             response = self._http_client.request(
                 prepared.method.value,
@@ -128,7 +103,6 @@ class ScreenshotScoutClient:
                 headers=prepared.headers,
                 content=prepared.content,
                 follow_redirects=False,
-                timeout=httpx_request_timeout,
             )
             body = response.read()
         except Exception as cause:
@@ -190,15 +164,11 @@ class AsyncScreenshotScoutClient:
         access_key: str,
         *,
         secret_key: str | None = None,
-        base_url: str = _DEFAULT_BASE_URL,
-        request_timeout: RequestTimeout = _REQUEST_TIMEOUT_DEFAULT,
         http_client: httpx.AsyncClient | None = None,
     ) -> None:
         self._configuration = _build_configuration(
             access_key=access_key,
             secret_key=secret_key,
-            base_url=base_url,
-            request_timeout=request_timeout,
         )
         if http_client is not None and not isinstance(http_client, httpx.AsyncClient):
             raise ScreenshotScoutConfigurationError(
@@ -210,7 +180,7 @@ class AsyncScreenshotScoutClient:
             if http_client is not None
             else httpx.AsyncClient(
                 follow_redirects=False,
-                timeout=self._configuration.request_timeout,
+                timeout=None,
             )
         )
         self._closed = False
@@ -226,11 +196,6 @@ class AsyncScreenshotScoutClient:
 
         self._ensure_open()
         prepared = _prepare_request(self._configuration, target_url, options, method)
-        httpx_request_timeout = (
-            httpx.USE_CLIENT_DEFAULT
-            if self._configuration.use_client_default_timeout
-            else self._configuration.request_timeout
-        )
         try:
             response = await self._http_client.request(
                 prepared.method.value,
@@ -238,7 +203,6 @@ class AsyncScreenshotScoutClient:
                 headers=prepared.headers,
                 content=prepared.content,
                 follow_redirects=False,
-                timeout=httpx_request_timeout,
             )
             body = await response.aread()
         except asyncio.CancelledError:
@@ -296,8 +260,6 @@ def _build_configuration(
     *,
     access_key: object,
     secret_key: object,
-    base_url: object,
-    request_timeout: object,
 ) -> _ClientConfiguration:
     if not isinstance(access_key, str) or not access_key.strip():
         raise ScreenshotScoutConfigurationError(
@@ -312,13 +274,6 @@ def _build_configuration(
             "The Screenshot Scout secret key must be a non-blank string when provided."
         )
 
-    endpoint = _capture_endpoint(base_url)
-    if request_timeout is _REQUEST_TIMEOUT_UNSET:
-        timeout = None
-        use_client_default_timeout = True
-    else:
-        timeout = _validate_request_timeout(request_timeout)
-        use_client_default_timeout = False
     try:
         httpx.Headers({"Authorization": f"Bearer {access_key}"})
     except (TypeError, ValueError) as cause:
@@ -330,53 +285,7 @@ def _build_configuration(
     return _ClientConfiguration(
         access_key=access_key,
         secret_key=secret_key,
-        endpoint=endpoint,
-        request_timeout=timeout,
-        use_client_default_timeout=use_client_default_timeout,
     )
-
-
-def _capture_endpoint(base_url: object) -> str:
-    if not isinstance(base_url, str) or not base_url or base_url.strip() != base_url:
-        raise ScreenshotScoutConfigurationError(
-            "base_url must be a non-blank absolute HTTP or HTTPS URL."
-        )
-    try:
-        parsed = httpx.URL(base_url)
-    except (TypeError, httpx.InvalidURL) as cause:
-        error = ScreenshotScoutConfigurationError(
-            "base_url must be a non-blank absolute HTTP or HTTPS URL."
-        )
-        raise error from cause
-    if parsed.scheme not in {"http", "https"} or parsed.host is None:
-        raise ScreenshotScoutConfigurationError(
-            "base_url must be a non-blank absolute HTTP or HTTPS URL."
-        )
-    if parsed.query or parsed.fragment:
-        raise ScreenshotScoutConfigurationError(
-            "base_url must not contain a query string or fragment."
-        )
-
-    base_path = parsed.path.rstrip("/")
-    endpoint = parsed.copy_with(path=f"{base_path}/v1/capture")
-    return str(endpoint)
-
-
-def _validate_request_timeout(value: object) -> RequestTimeout:
-    if value is None:
-        return None
-    if isinstance(value, httpx.Timeout):
-        return value
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise ScreenshotScoutConfigurationError(
-            "request_timeout must be a positive number, httpx.Timeout, or None."
-        )
-    timeout = float(value)
-    if not math.isfinite(timeout) or timeout <= 0:
-        raise ScreenshotScoutConfigurationError(
-            "request_timeout must be a positive number, httpx.Timeout, or None."
-        )
-    return timeout
 
 
 def _prepare_request(
@@ -397,14 +306,14 @@ def _prepare_request(
         if signature is not None:
             pairs.append(("signature", signature))
         query = encode_query_pairs(pairs)
-        url = f"{configuration.endpoint}?{query}"
+        url = f"{_CAPTURE_ENDPOINT}?{query}"
         content = None
     else:
         headers["Content-Type"] = "application/json"
         body: dict[str, WireJSONValue] = dict(serialized.body)
         if signature is not None:
             body["signature"] = signature
-        url = configuration.endpoint
+        url = _CAPTURE_ENDPOINT
         content = encode_json_body(body)
 
     return _PreparedRequest(
@@ -429,7 +338,7 @@ def _build_capture_url(
     ]
     if signature is not None:
         pairs.append(("signature", signature))
-    return f"{configuration.endpoint}?{encode_query_pairs(pairs)}"
+    return f"{_CAPTURE_ENDPOINT}?{encode_query_pairs(pairs)}"
 
 
 def _create_signature(

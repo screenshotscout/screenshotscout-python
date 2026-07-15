@@ -16,7 +16,6 @@ from screenshotscout import (
     CaptureOptions,
     CaptureResponseType,
     JsonCaptureResponse,
-    RequestTimeout,
     ScreenshotScoutAPIError,
     ScreenshotScoutClient,
     ScreenshotScoutConfigurationError,
@@ -77,18 +76,8 @@ def test_configuration_validates_access_key(
 
 
 def test_configuration_validates_optional_values() -> None:
-    request_timeout: RequestTimeout = httpx.Timeout(1)
-    with ScreenshotScoutClient("key", request_timeout=request_timeout):
-        pass
-
     with pytest.raises(ScreenshotScoutConfigurationError, match="secret key"):
         ScreenshotScoutClient("key", secret_key="")
-    with pytest.raises(ScreenshotScoutConfigurationError, match="base_url"):
-        ScreenshotScoutClient("key", base_url="relative")
-    with pytest.raises(ScreenshotScoutConfigurationError, match="query string"):
-        ScreenshotScoutClient("key", base_url="https://api.example.test?x=1")
-    with pytest.raises(ScreenshotScoutConfigurationError, match="request_timeout"):
-        ScreenshotScoutClient("key", request_timeout=float("inf"))
     with pytest.raises(ScreenshotScoutConfigurationError, match="httpx.Client"):
         ScreenshotScoutClient("key", http_client=cast(Any, object()))
 
@@ -105,7 +94,7 @@ def test_injected_http_client_truth_value_is_not_evaluated() -> None:
         assert not http_client.is_closed
 
 
-def test_injected_http_client_timeout_inheritance_and_explicit_disable() -> None:
+def test_injected_http_client_timeout_is_preserved() -> None:
     requests: list[httpx.Request] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -113,31 +102,15 @@ def test_injected_http_client_timeout_inheritance_and_explicit_disable() -> None
         return _default_response(request)
 
     with httpx.Client(transport=httpx.MockTransport(handler), timeout=7.0) as http_client:
-        inherited_client = ScreenshotScoutClient("key", http_client=http_client)
-        inherited_client.capture("https://example.com")
-        inherited_client.close()
+        with ScreenshotScoutClient("key", http_client=http_client) as client:
+            client.capture("https://example.com")
 
-        timeout_free_client = ScreenshotScoutClient(
-            "key",
-            request_timeout=None,
-            http_client=http_client,
-        )
-        timeout_free_client.capture("https://example.com")
-        timeout_free_client.close()
-
-    inherited_timeout = cast(dict[str, float | None], requests[0].extensions["timeout"])
-    disabled_timeout = cast(dict[str, float | None], requests[1].extensions["timeout"])
-    assert inherited_timeout == {
+    timeout = cast(dict[str, float | None], requests[0].extensions["timeout"])
+    assert timeout == {
         "connect": 7.0,
         "read": 7.0,
         "write": 7.0,
         "pool": 7.0,
-    }
-    assert disabled_timeout == {
-        "connect": None,
-        "read": None,
-        "write": None,
-        "pool": None,
     }
 
 
@@ -743,27 +716,18 @@ def test_transport_failure_retains_native_cause_and_is_not_retried() -> None:
     assert captured.value.__cause__ is native_cause
 
 
-def test_custom_base_url_timeout_and_injected_client_lifecycle() -> None:
+def test_fixed_endpoint_and_injected_client_lifecycle() -> None:
     http_client, requests = _recording_http_client()
     with http_client:
         with ScreenshotScoutClient(
             "key",
-            base_url="https://api.example.test/root/",
-            request_timeout=12.5,
             http_client=http_client,
         ) as client:
             client.capture("https://example.com")
         assert not http_client.is_closed
 
     request = requests[0]
-    assert str(request.url) == "https://api.example.test/root/v1/capture"
-    timeout = cast(dict[str, float | None], request.extensions["timeout"])
-    assert timeout == {
-        "connect": 12.5,
-        "read": 12.5,
-        "write": 12.5,
-        "pool": 12.5,
-    }
+    assert str(request.url) == "https://api.screenshotscout.com/v1/capture"
     with pytest.raises(ScreenshotScoutConfigurationError, match="closed"):
         client.capture("https://example.com")
 

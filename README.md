@@ -205,7 +205,6 @@ from screenshotscout import CaptureOptions, ScreenshotScoutClient
 
 with ScreenshotScoutClient(
     os.environ["SCREENSHOTSCOUT_ACCESS_KEY"],
-    request_timeout=300.0,
 ) as client:
     response = client.capture(
         "https://example.com",
@@ -214,7 +213,8 @@ with ScreenshotScoutClient(
 ```
 
 `CaptureOptions.timeout` controls how long Screenshot Scout may spend capturing the page.
-`request_timeout` controls how long your application waits for the API response.
+If your application needs network timeouts, configure them on an injected `httpx.Client` or
+`httpx.AsyncClient`; async callers can also set a total deadline with `asyncio.timeout()`.
 
 ## Responses
 

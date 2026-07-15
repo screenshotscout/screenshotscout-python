@@ -32,11 +32,10 @@ async def test_async_client_uses_same_post_and_response_behavior() -> None:
             headers={"content-type": "application/json"},
         )
 
-    http_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(handler), timeout=20)
     async with http_client:
         async with AsyncScreenshotScoutClient(
             "key",
-            request_timeout=20,
             http_client=http_client,
         ) as client:
             response = await client.capture(
@@ -161,7 +160,7 @@ async def test_injected_async_http_client_truth_value_is_not_evaluated() -> None
 
 
 @pytest.mark.asyncio
-async def test_injected_async_client_timeout_inheritance_and_explicit_disable() -> None:
+async def test_injected_async_client_timeout_is_preserved() -> None:
     requests: list[httpx.Request] = []
 
     async def handler(request: httpx.Request) -> httpx.Response:
@@ -172,29 +171,13 @@ async def test_injected_async_client_timeout_inheritance_and_explicit_disable() 
         transport=httpx.MockTransport(handler),
         timeout=7.0,
     ) as http_client:
-        inherited_client = AsyncScreenshotScoutClient("key", http_client=http_client)
-        await inherited_client.capture("https://example.com")
-        await inherited_client.aclose()
+        async with AsyncScreenshotScoutClient("key", http_client=http_client) as client:
+            await client.capture("https://example.com")
 
-        timeout_free_client = AsyncScreenshotScoutClient(
-            "key",
-            request_timeout=None,
-            http_client=http_client,
-        )
-        await timeout_free_client.capture("https://example.com")
-        await timeout_free_client.aclose()
-
-    inherited_timeout = cast(dict[str, float | None], requests[0].extensions["timeout"])
-    disabled_timeout = cast(dict[str, float | None], requests[1].extensions["timeout"])
-    assert inherited_timeout == {
+    timeout = cast(dict[str, float | None], requests[0].extensions["timeout"])
+    assert timeout == {
         "connect": 7.0,
         "read": 7.0,
         "write": 7.0,
         "pool": 7.0,
-    }
-    assert disabled_timeout == {
-        "connect": None,
-        "read": None,
-        "write": None,
-        "pool": None,
     }

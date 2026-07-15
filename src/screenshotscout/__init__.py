@@ -1,6 +1,6 @@
 """Official Python SDK for the Screenshot Scout screenshot API."""
 
-from .client import AsyncScreenshotScoutClient, RequestTimeout, ScreenshotScoutClient
+from .client import AsyncScreenshotScoutClient, ScreenshotScoutClient
 from .errors import (
     ScreenshotScoutAPIError,
     ScreenshotScoutConfigurationError,
@@ -46,7 +46,6 @@ __all__ = [
     "CaptureWaitUntil",
     "JsonCaptureResponse",
     "RawResponse",
-    "RequestTimeout",
     "ScreenshotScoutAPIError",
     "ScreenshotScoutClient",
     "ScreenshotScoutConfigurationError",
