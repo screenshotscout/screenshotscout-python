@@ -86,7 +86,8 @@ class CapturePdfPaperFormat:
 
     A3: Final[str] = "a3"
     A4: Final[str] = "a4"
-    CONTENT: Final[str] = "content"
+    A5: Final[str] = "a5"
+    A6: Final[str] = "a6"
     LEGAL: Final[str] = "legal"
     LETTER: Final[str] = "letter"
     TABLOID: Final[str] = "tabloid"
@@ -189,6 +190,7 @@ class CaptureOptions:
     pdf_margin_bottom: str | None = None
     pdf_margin_left: str | None = None
     pdf_scale: float | None = None
+    pdf_page_ranges: str | None = None
 
     # Caching
     cache: bool | None = None
