@@ -20,7 +20,6 @@ from ._response import (
     decode_success_response,
 )
 from ._serialization import (
-    WireJSONValue,
     WirePair,
     build_canonical_query,
     encode_json_body,
@@ -296,6 +295,12 @@ def _prepare_request(
 ) -> _PreparedRequest:
     serialized = serialize_capture_options(target_url, options)
     capture_method = serialize_capture_method(method)
+    if configuration.secret_key is not None and capture_method is CaptureHTTPMethod.POST:
+        raise ScreenshotScoutConfigurationError(
+            "POST requests can't be signed. This client has a secret key: send this capture "
+            "with method GET, or use a client without a secret key and an API key that "
+            "doesn't require signed requests."
+        )
     signature = _create_signature(configuration, serialized.pairs)
     headers: dict[str, str] = {
         "Authorization": f"Bearer {configuration.access_key}",
@@ -310,11 +315,8 @@ def _prepare_request(
         content = None
     else:
         headers["Content-Type"] = "application/json"
-        body: dict[str, WireJSONValue] = dict(serialized.body)
-        if signature is not None:
-            body["signature"] = signature
         url = _CAPTURE_ENDPOINT
-        content = encode_json_body(body)
+        content = encode_json_body(serialized.body)
 
     return _PreparedRequest(
         method=capture_method,

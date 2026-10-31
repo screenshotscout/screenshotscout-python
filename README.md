@@ -142,19 +142,23 @@ the [API Keys page](https://screenshotscout.com/app/api-keys).
 
 ## Signed requests
 
-Pass your secret key to sign GET and POST requests and generated capture URLs automatically. The
-secret key stays in your application and is never transmitted.
+Pass your secret key to sign generated capture URLs and GET requests automatically. The secret key
+stays in your application and is never transmitted. POST requests can't be signed, so capture with
+`CaptureHTTPMethod.GET`:
 
 ```python
 import os
 
-from screenshotscout import ScreenshotScoutClient
+from screenshotscout import CaptureHTTPMethod, ScreenshotScoutClient
 
 with ScreenshotScoutClient(
     os.environ["SCREENSHOTSCOUT_ACCESS_KEY"],
     secret_key=os.environ["SCREENSHOTSCOUT_SECRET_KEY"],
 ) as client:
-    response = client.capture("https://example.com")
+    response = client.capture(
+        "https://example.com",
+        method=CaptureHTTPMethod.GET,
+    )
 ```
 
 See the [signed requests guide](https://screenshotscout.com/docs/signed-requests) for details.

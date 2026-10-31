@@ -323,7 +323,7 @@ def test_get_preserves_repeated_values_and_uses_bearer_authentication() -> None:
     try:
         client = ScreenshotScoutClient("query-secret", http_client=http_client)
         client.capture(
-            "https://example.com/a path~",
+            "https://example.com/a path~*",
             CaptureOptions(
                 cookies=["a=1", "a=1"],
                 headers=["X-Test:one", "X-Test:one"],
@@ -346,7 +346,7 @@ def test_get_preserves_repeated_values_and_uses_bearer_authentication() -> None:
     assert request.url.params.get("access_key") is None
     assert request.url.params.get("signature") is None
     assert request.url.query.decode("ascii") == (
-        "url=https%3A%2F%2Fexample.com%2Fa+path%7E"
+        "url=https%3A%2F%2Fexample.com%2Fa%20path~%2A"
         "&cookies=a%3D1&cookies=a%3D1"
         "&headers=X-Test%3Aone&headers=X-Test%3Aone"
         "&delay=0&full_page=false&cache_key="
@@ -450,7 +450,7 @@ def test_signing_matches_the_api_and_node_interoperability_vector() -> None:
         headers=["X-Test:one", "X-Test:two"],
     )
     target_url = "https://example.com/a b?x=1&y=2"
-    expected_signature = "0c4928ba691575903f27b911b8ea1a536604ca070d60d886e10c127c05e236fc"
+    expected_signature = "6419f2ac8c0440f1e341b547630606c9dc74dacfbb2df8e122fc9ae26831d893"
 
     try:
         client = ScreenshotScoutClient(
@@ -459,17 +459,40 @@ def test_signing_matches_the_api_and_node_interoperability_vector() -> None:
             http_client=http_client,
         )
         client.capture(target_url, options, method=CaptureHTTPMethod.GET)
-        client.capture(target_url, options, method=CaptureHTTPMethod.POST)
         built_url = client.build_capture_url(target_url, options)
     finally:
         http_client.close()
 
+    assert len(requests) == 1
     assert requests[0].url.params["signature"] == expected_signature
-    assert _json_request_body(requests[1])["signature"] == expected_signature
-    assert dict(parse_qsl(urlsplit(built_url).query))["signature"] == expected_signature
-    assert "sk_test" not in built_url
     assert requests[0].url.params.get("access_key") is None
-    assert "access_key" not in _json_request_body(requests[1])
+    assert built_url == (
+        "https://api.screenshotscout.com/v1/capture?access_key=ak_test"
+        "&url=https%3A%2F%2Fexample.com%2Fa%20b%3Fx%3D1%26y%3D2"
+        "&response_type=json&headers=X-Test%3Aone&headers=X-Test%3Atwo&delay=0&full_page=false"
+        f"&signature={expected_signature}"
+    )
+    assert "sk_test" not in built_url
+
+
+def test_secret_key_refuses_post_before_transport() -> None:
+    http_client, requests = _recording_http_client()
+    try:
+        client = ScreenshotScoutClient("ak_test", secret_key="sk_test", http_client=http_client)
+        with pytest.raises(ScreenshotScoutConfigurationError) as default_method:
+            client.capture("https://example.com")
+        with pytest.raises(ScreenshotScoutConfigurationError) as explicit_post:
+            client.capture("https://example.com", method=CaptureHTTPMethod.POST)
+    finally:
+        http_client.close()
+
+    assert requests == []
+    assert str(default_method.value) == (
+        "POST requests can't be signed. This client has a secret key: send this capture with "
+        "method GET, or use a client without a secret key and an API key that doesn't require "
+        "signed requests."
+    )
+    assert str(explicit_post.value) == str(default_method.value)
 
 
 def test_default_binary_response_retains_bytes_metadata_and_raw_response() -> None:

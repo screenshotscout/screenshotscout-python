@@ -99,6 +99,29 @@ async def test_async_get_and_url_builder_use_closed_method_and_signing() -> None
 
 
 @pytest.mark.asyncio
+async def test_async_secret_key_refuses_post_before_transport() -> None:
+    requests: list[httpx.Request] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, content=b"image", headers={"content-type": "image/png"})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+        client = AsyncScreenshotScoutClient(
+            "ak_test",
+            secret_key="sk_test",
+            http_client=http_client,
+        )
+        with pytest.raises(ScreenshotScoutConfigurationError, match="can't be signed"):
+            await client.capture("https://example.com")
+        with pytest.raises(ScreenshotScoutConfigurationError, match="can't be signed"):
+            await client.capture("https://example.com", method=CaptureHTTPMethod.POST)
+        await client.aclose()
+
+    assert requests == []
+
+
+@pytest.mark.asyncio
 async def test_async_transport_failure_retains_cause() -> None:
     native_cause = RuntimeError("network unavailable")
 

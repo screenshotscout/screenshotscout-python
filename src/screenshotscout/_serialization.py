@@ -28,7 +28,7 @@ _REPEATED_OPTIONS = frozenset(
         "inject_js",
     }
 )
-_FORM_SAFE_BYTES = frozenset(b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789*-._")
+_UNRESERVED_BYTES = frozenset(b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,11 +99,11 @@ def build_canonical_query(pairs: Sequence[WirePair], access_key: str) -> str:
 
 
 def encode_query_pairs(pairs: Sequence[WirePair]) -> str:
-    """Encode pairs with the WHATWG URLSearchParams form-encoding rules."""
+    """Percent-encode pairs per RFC 3986: only A-Z a-z 0-9 - . _ ~ stay unencoded."""
 
     try:
         return "&".join(
-            f"{_form_encode_component(name)}={_form_encode_component(value)}"
+            f"{_percent_encode_component(name)}={_percent_encode_component(value)}"
             for name, value in pairs
         )
     except UnicodeError as cause:
@@ -201,13 +201,11 @@ def _ecmascript_number_string(value: float) -> str:
     return f"{mantissa}e{sign}{exponent}"
 
 
-def _form_encode_component(value: str) -> str:
+def _percent_encode_component(value: str) -> str:
     encoded: list[str] = []
     for byte in value.encode("utf-8"):
-        if byte in _FORM_SAFE_BYTES:
+        if byte in _UNRESERVED_BYTES:
             encoded.append(chr(byte))
-        elif byte == 0x20:
-            encoded.append("+")
         else:
             encoded.append(f"%{byte:02X}")
     return "".join(encoded)
