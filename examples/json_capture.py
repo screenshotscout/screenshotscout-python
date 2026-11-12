@@ -1,7 +1,5 @@
 """Request a JSON Screenshot Scout capture result."""
 
-import os
-
 from screenshotscout import (
     CaptureOptions,
     CaptureResponseType,
@@ -13,7 +11,7 @@ from screenshotscout import (
 def main() -> None:
     options = CaptureOptions(response_type=CaptureResponseType.JSON)
 
-    with ScreenshotScoutClient(os.environ["SCREENSHOTSCOUT_ACCESS_KEY"]) as client:
+    with ScreenshotScoutClient() as client:  # Reads SCREENSHOTSCOUT_ACCESS_KEY
         response = client.capture("https://example.com", options)
 
     if not isinstance(response, JsonCaptureResponse):

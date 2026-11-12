@@ -7,8 +7,8 @@ python -m pip install -e .
 python examples/binary_capture.py
 ```
 
-The examples read credentials explicitly and pass them to the SDK. To sign the URL that
-`capture_url.py` builds, also set `SCREENSHOTSCOUT_SECRET_KEY`.
+If `SCREENSHOTSCOUT_SECRET_KEY` is also set, the client signs its requests and the URL that
+`capture_url.py` prints.
 
 - `binary_capture.py` saves a WebP capture as `screenshot.webp`.
 - `json_capture.py` requests a JSON result and prints the screenshot URL.

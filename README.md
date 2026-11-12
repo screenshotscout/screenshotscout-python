@@ -18,17 +18,17 @@ python -m pip install screenshotscout
 Before using the SDK, [sign up for Screenshot Scout](https://screenshotscout.com/auth/signup) or sign in to
 your existing account. Screenshot Scout automatically creates a default API key when you sign up.
 
-Open the [API Keys page](https://screenshotscout.com/app/api-keys), copy the access key and secret
-key, and store them securely. The access key is required when creating `ScreenshotScoutClient` or
-`AsyncScreenshotScoutClient`. The secret key is optional and enables
-[signed requests](#signed-requests).
+Open the [API Keys page](https://screenshotscout.com/app/api-keys) and copy the access key. You only
+need the secret key for [signed requests](#signed-requests).
+
+Set the access key as the `SCREENSHOTSCOUT_ACCESS_KEY` environment variable, or
+[pass it in code](#pass-the-keys-yourself).
 
 ## Capture a screenshot
 
-Read your access key from an environment variable and pass it to the client:
+Create a client and call `capture()` with the URL you want to screenshot:
 
 ```python
-import os
 from pathlib import Path
 
 from screenshotscout import (
@@ -38,11 +38,7 @@ from screenshotscout import (
     ScreenshotScoutClient,
 )
 
-access_key = os.environ.get("SCREENSHOTSCOUT_ACCESS_KEY")
-if not access_key:
-    raise RuntimeError("Set SCREENSHOTSCOUT_ACCESS_KEY first.")
-
-with ScreenshotScoutClient(access_key) as client:
+with ScreenshotScoutClient() as client:  # Reads SCREENSHOTSCOUT_ACCESS_KEY
     response = client.capture(
         "https://example.com",
         CaptureOptions(format=CaptureFormat.WEBP, full_page=True),
@@ -54,7 +50,8 @@ if not isinstance(response, BinaryCaptureResponse):
 Path("screenshot.webp").write_bytes(response.bytes)
 ```
 
-POST is used by default. The screenshot is available as `response.bytes`.
+POST is used by default, or GET when the client has a secret key. The screenshot is available as
+`response.bytes`.
 
 ## Request a JSON result
 
@@ -62,8 +59,6 @@ Set `response_type` to `CaptureResponseType.JSON` to receive screenshot metadata
 binary file:
 
 ```python
-import os
-
 from screenshotscout import (
     CaptureOptions,
     CaptureResponseType,
@@ -73,7 +68,7 @@ from screenshotscout import (
 
 options = CaptureOptions(response_type=CaptureResponseType.JSON)
 
-with ScreenshotScoutClient(os.environ["SCREENSHOTSCOUT_ACCESS_KEY"]) as client:
+with ScreenshotScoutClient() as client:  # Reads SCREENSHOTSCOUT_ACCESS_KEY
     response = client.capture("https://example.com", options)
 
 if not isinstance(response, JsonCaptureResponse):
@@ -89,13 +84,12 @@ and returns the completed capture; it does not create a background job.
 
 ```python
 import asyncio
-import os
 
 from screenshotscout import AsyncScreenshotScoutClient, BinaryCaptureResponse, CaptureOptions
 
 
 async def main() -> None:
-    async with AsyncScreenshotScoutClient(os.environ["SCREENSHOTSCOUT_ACCESS_KEY"]) as client:
+    async with AsyncScreenshotScoutClient() as client:  # Reads SCREENSHOTSCOUT_ACCESS_KEY
         response = await client.capture(
             "https://example.com",
             CaptureOptions(full_page=True),
@@ -110,7 +104,8 @@ asyncio.run(main())
 
 ## Use GET
 
-POST is the default. Pass `CaptureHTTPMethod.GET` when you need a GET request:
+POST is the default, or GET when the client has a secret key. Pass `CaptureHTTPMethod.GET` when
+you need a GET request:
 
 ```python
 from screenshotscout import CaptureHTTPMethod
@@ -142,26 +137,38 @@ the [API Keys page](https://screenshotscout.com/app/api-keys).
 
 ## Signed requests
 
-Pass your secret key to sign generated capture URLs and GET requests automatically. The secret key
-stays in your application and is never transmitted. POST requests can't be signed, so capture with
-`CaptureHTTPMethod.GET`:
+Set the API key's secret key as the `SCREENSHOTSCOUT_SECRET_KEY` environment variable. The client
+then signs its capture requests and the capture URLs it builds, with no change to your code:
 
 ```python
-import os
+from screenshotscout import ScreenshotScoutClient
 
-from screenshotscout import CaptureHTTPMethod, ScreenshotScoutClient
-
-with ScreenshotScoutClient(
-    os.environ["SCREENSHOTSCOUT_ACCESS_KEY"],
-    secret_key=os.environ["SCREENSHOTSCOUT_SECRET_KEY"],
-) as client:
-    response = client.capture(
-        "https://example.com",
-        method=CaptureHTTPMethod.GET,
-    )
+# Reads SCREENSHOTSCOUT_ACCESS_KEY and SCREENSHOTSCOUT_SECRET_KEY
+with ScreenshotScoutClient() as client:
+    response = client.capture("https://example.com")
 ```
 
-See the [signed requests guide](https://screenshotscout.com/docs/signed-requests) for details.
+The secret key is used locally and is never transmitted. See the
+[signed requests guide](https://screenshotscout.com/docs/signed-requests) for details.
+
+## Pass the keys yourself
+
+To use keys from somewhere other than the environment, such as a secrets manager or per-customer
+settings, pass them to the client:
+
+```python
+from screenshotscout import ScreenshotScoutClient
+
+with ScreenshotScoutClient(
+    config.access_key,
+    secret_key=config.secret_key,  # optional
+) as client:
+    response = client.capture("https://example.com")
+```
+
+If you pass either key, the client reads neither environment variable. If you pass no key, for
+example because the variable holding it is `None`, the client reads both environment variables
+instead.
 
 ## Capture options
 
@@ -203,13 +210,9 @@ available values and examples.
 ## Timeouts
 
 ```python
-import os
-
 from screenshotscout import CaptureOptions, ScreenshotScoutClient
 
-with ScreenshotScoutClient(
-    os.environ["SCREENSHOTSCOUT_ACCESS_KEY"],
-) as client:
+with ScreenshotScoutClient() as client:  # Reads SCREENSHOTSCOUT_ACCESS_KEY
     response = client.capture(
         "https://example.com",
         CaptureOptions(timeout=180),
@@ -232,8 +235,6 @@ and body.
 ## Error handling
 
 ```python
-import os
-
 from screenshotscout import (
     ScreenshotScoutAPIError,
     ScreenshotScoutClient,
@@ -242,7 +243,7 @@ from screenshotscout import (
 )
 
 try:
-    with ScreenshotScoutClient(os.environ["SCREENSHOTSCOUT_ACCESS_KEY"]) as client:
+    with ScreenshotScoutClient() as client:  # Reads SCREENSHOTSCOUT_ACCESS_KEY
         response = client.capture("https://example.com")
 except ScreenshotScoutAPIError as error:
     print(error.status, error.error_code, error.error_message)

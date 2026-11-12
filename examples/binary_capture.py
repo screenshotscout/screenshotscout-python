@@ -1,6 +1,5 @@
 """Save a binary Screenshot Scout capture to screenshot.webp."""
 
-import os
 from pathlib import Path
 
 from screenshotscout import (
@@ -12,10 +11,9 @@ from screenshotscout import (
 
 
 def main() -> None:
-    access_key = os.environ["SCREENSHOTSCOUT_ACCESS_KEY"]
     options = CaptureOptions(format=CaptureFormat.WEBP, full_page=True)
 
-    with ScreenshotScoutClient(access_key) as client:
+    with ScreenshotScoutClient() as client:  # Reads SCREENSHOTSCOUT_ACCESS_KEY
         response = client.capture("https://example.com", options)
 
     if not isinstance(response, BinaryCaptureResponse):

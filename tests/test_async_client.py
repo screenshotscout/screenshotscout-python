@@ -16,6 +16,9 @@ from screenshotscout import (
     ScreenshotScoutTransportError,
 )
 
+# The same signing vector as in test_client.py, signed with ak_test and sk_test.
+_EXPECTED_SIGNATURE = "6419f2ac8c0440f1e341b547630606c9dc74dacfbb2df8e122fc9ae26831d893"
+
 
 @pytest.mark.asyncio
 async def test_async_client_uses_same_post_and_response_behavior() -> None:
@@ -99,7 +102,7 @@ async def test_async_get_and_url_builder_use_closed_method_and_signing() -> None
 
 
 @pytest.mark.asyncio
-async def test_async_secret_key_refuses_post_before_transport() -> None:
+async def test_async_secret_key_sends_get_by_default_and_refuses_an_explicit_post() -> None:
     requests: list[httpx.Request] = []
 
     async def handler(request: httpx.Request) -> httpx.Response:
@@ -112,13 +115,67 @@ async def test_async_secret_key_refuses_post_before_transport() -> None:
             secret_key="sk_test",
             http_client=http_client,
         )
-        with pytest.raises(ScreenshotScoutConfigurationError, match="can't be signed"):
-            await client.capture("https://example.com")
+        await client.capture("https://example.com")
         with pytest.raises(ScreenshotScoutConfigurationError, match="can't be signed"):
             await client.capture("https://example.com", method=CaptureHTTPMethod.POST)
         await client.aclose()
 
-    assert requests == []
+    assert len(requests) == 1
+    assert requests[0].method == "GET"
+    assert requests[0].url.params.get("signature") is not None
+
+
+@pytest.mark.asyncio
+async def test_async_client_without_keys_reads_both_environment_variables_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SCREENSHOTSCOUT_ACCESS_KEY", "ak_test")
+    monkeypatch.setenv("SCREENSHOTSCOUT_SECRET_KEY", "sk_test")
+    requests: list[httpx.Request] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, content=b"{}", headers={"content-type": "application/json"})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+        async with AsyncScreenshotScoutClient(http_client=http_client) as client:
+            monkeypatch.setenv("SCREENSHOTSCOUT_ACCESS_KEY", "changed")
+            monkeypatch.setenv("SCREENSHOTSCOUT_SECRET_KEY", "changed")
+            await client.capture(
+                "https://example.com/a b?x=1&y=2",
+                CaptureOptions(
+                    response_type="json",
+                    full_page=False,
+                    delay=0,
+                    headers=["X-Test:one", "X-Test:two"],
+                ),
+            )
+            with pytest.raises(ScreenshotScoutConfigurationError) as explicit_post:
+                await client.capture("https://example.com", method=CaptureHTTPMethod.POST)
+
+    assert len(requests) == 1
+    assert requests[0].method == "GET"
+    assert requests[0].headers["authorization"] == "Bearer ak_test"
+    assert requests[0].url.params["signature"] == _EXPECTED_SIGNATURE
+    assert str(explicit_post.value) == (
+        "POST requests can't be signed. This client has a secret key from "
+        "SCREENSHOTSCOUT_SECRET_KEY: send this capture with method GET, or use a client without "
+        "a secret key and an API key that doesn't require signed requests."
+    )
+
+
+def test_async_client_missing_access_key_messages(monkeypatch: pytest.MonkeyPatch) -> None:
+    with pytest.raises(ScreenshotScoutConfigurationError) as missing:
+        AsyncScreenshotScoutClient()
+    monkeypatch.setenv("SCREENSHOTSCOUT_ACCESS_KEY", "ak_env")
+    with pytest.raises(ScreenshotScoutConfigurationError) as secret_only:
+        AsyncScreenshotScoutClient(secret_key="sk_code")
+
+    assert str(missing.value) == (
+        "A non-blank Screenshot Scout access key is required. Pass one, or set "
+        "SCREENSHOTSCOUT_ACCESS_KEY."
+    )
+    assert str(secret_only.value) == "A non-blank Screenshot Scout access key is required."
 
 
 @pytest.mark.asyncio

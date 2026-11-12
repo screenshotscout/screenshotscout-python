@@ -23,8 +23,22 @@ from screenshotscout import (
     ScreenshotScoutSerializationError,
     ScreenshotScoutTransportError,
 )
+from screenshotscout.client import _prepare_request
 
 ResponseFactory = Callable[[httpx.Request], httpx.Response]
+
+# The SDK interoperability vector in fixtures/signing-vectors.json, signed with ak_test and sk_test.
+_SIGNED_TARGET_URL = "https://example.com/a b?x=1&y=2"
+_EXPECTED_SIGNATURE = "6419f2ac8c0440f1e341b547630606c9dc74dacfbb2df8e122fc9ae26831d893"
+
+
+def _signed_options() -> CaptureOptions:
+    return CaptureOptions(
+        response_type="json",
+        full_page=False,
+        delay=0,
+        headers=["X-Test:one", "X-Test:two"],
+    )
 
 
 def _default_response(_request: httpx.Request) -> httpx.Response:
@@ -32,6 +46,14 @@ def _default_response(_request: httpx.Request) -> httpx.Response:
         200,
         content=b"\x01",
         headers={"content-type": "image/png"},
+    )
+
+
+def _json_response(_request: httpx.Request) -> httpx.Response:
+    return httpx.Response(
+        200,
+        content=b"{}",
+        headers={"content-type": "application/json"},
     )
 
 
@@ -435,22 +457,7 @@ def test_unsafe_structures_fail_before_transport(
 
 
 def test_signing_matches_the_api_and_node_interoperability_vector() -> None:
-    def json_response(_request: httpx.Request) -> httpx.Response:
-        return httpx.Response(
-            200,
-            content=b"{}",
-            headers={"content-type": "application/json"},
-        )
-
-    http_client, requests = _recording_http_client(json_response)
-    options = CaptureOptions(
-        response_type="json",
-        full_page=False,
-        delay=0,
-        headers=["X-Test:one", "X-Test:two"],
-    )
-    target_url = "https://example.com/a b?x=1&y=2"
-    expected_signature = "6419f2ac8c0440f1e341b547630606c9dc74dacfbb2df8e122fc9ae26831d893"
+    http_client, requests = _recording_http_client(_json_response)
 
     try:
         client = ScreenshotScoutClient(
@@ -458,41 +465,149 @@ def test_signing_matches_the_api_and_node_interoperability_vector() -> None:
             secret_key="sk_test",
             http_client=http_client,
         )
-        client.capture(target_url, options, method=CaptureHTTPMethod.GET)
-        built_url = client.build_capture_url(target_url, options)
+        client.capture(_SIGNED_TARGET_URL, _signed_options(), method=CaptureHTTPMethod.GET)
+        built_url = client.build_capture_url(_SIGNED_TARGET_URL, _signed_options())
     finally:
         http_client.close()
 
     assert len(requests) == 1
-    assert requests[0].url.params["signature"] == expected_signature
+    assert requests[0].url.params["signature"] == _EXPECTED_SIGNATURE
     assert requests[0].url.params.get("access_key") is None
     assert built_url == (
         "https://api.screenshotscout.com/v1/capture?access_key=ak_test"
         "&url=https%3A%2F%2Fexample.com%2Fa%20b%3Fx%3D1%26y%3D2"
         "&response_type=json&headers=X-Test%3Aone&headers=X-Test%3Atwo&delay=0&full_page=false"
-        f"&signature={expected_signature}"
+        f"&signature={_EXPECTED_SIGNATURE}"
     )
     assert "sk_test" not in built_url
 
 
-def test_secret_key_refuses_post_before_transport() -> None:
+def test_secret_key_refuses_an_explicit_post_before_transport() -> None:
     http_client, requests = _recording_http_client()
     try:
         client = ScreenshotScoutClient("ak_test", secret_key="sk_test", http_client=http_client)
-        with pytest.raises(ScreenshotScoutConfigurationError) as default_method:
-            client.capture("https://example.com")
         with pytest.raises(ScreenshotScoutConfigurationError) as explicit_post:
             client.capture("https://example.com", method=CaptureHTTPMethod.POST)
     finally:
         http_client.close()
 
     assert requests == []
-    assert str(default_method.value) == (
+    assert str(explicit_post.value) == (
         "POST requests can't be signed. This client has a secret key: send this capture with "
         "method GET, or use a client without a secret key and an API key that doesn't require "
         "signed requests."
     )
-    assert str(explicit_post.value) == str(default_method.value)
+
+
+def test_secret_key_sends_a_signed_get_when_no_method_is_chosen() -> None:
+    http_client, requests = _recording_http_client(_json_response)
+    try:
+        client = ScreenshotScoutClient("ak_test", secret_key="sk_test", http_client=http_client)
+        client.capture(_SIGNED_TARGET_URL, _signed_options())
+    finally:
+        http_client.close()
+
+    assert len(requests) == 1
+    assert requests[0].method == "GET"
+    assert requests[0].content == b""
+    assert requests[0].url.params["signature"] == _EXPECTED_SIGNATURE
+
+
+def test_without_keys_the_client_reads_both_environment_variables_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SCREENSHOTSCOUT_ACCESS_KEY", "ak_test")
+    monkeypatch.setenv("SCREENSHOTSCOUT_SECRET_KEY", "sk_test")
+    http_client, requests = _recording_http_client(_json_response)
+    try:
+        client = ScreenshotScoutClient(http_client=http_client)
+        monkeypatch.setenv("SCREENSHOTSCOUT_ACCESS_KEY", "changed")
+        monkeypatch.setenv("SCREENSHOTSCOUT_SECRET_KEY", "changed")
+        client.capture(_SIGNED_TARGET_URL, _signed_options())
+    finally:
+        http_client.close()
+
+    request = requests[0]
+    assert request.method == "GET"
+    assert request.headers["authorization"] == "Bearer ak_test"
+    assert request.url.params["signature"] == _EXPECTED_SIGNATURE
+
+
+def test_a_client_with_no_arguments_reads_the_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SCREENSHOTSCOUT_ACCESS_KEY", "ak_env")
+
+    with ScreenshotScoutClient() as client:
+        capture_url = client.build_capture_url("https://example.com")
+
+    pairs = parse_qsl(urlsplit(capture_url).query)
+    assert ("access_key", "ak_env") in pairs
+    assert not any(name == "signature" for name, _ in pairs)
+
+
+def test_passing_either_key_means_the_environment_is_never_read(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SCREENSHOTSCOUT_ACCESS_KEY", "ak_env")
+    monkeypatch.setenv("SCREENSHOTSCOUT_SECRET_KEY", "sk_env")
+    http_client, requests = _recording_http_client()
+    try:
+        client = ScreenshotScoutClient("ak_code", http_client=http_client)
+        client.capture("https://example.com")
+    finally:
+        http_client.close()
+
+    assert requests[0].method == "POST"
+    assert requests[0].headers["authorization"] == "Bearer ak_code"
+    with pytest.raises(ScreenshotScoutConfigurationError) as secret_only:
+        ScreenshotScoutClient(secret_key="sk_code")
+    assert str(secret_only.value) == "A non-blank Screenshot Scout access key is required."
+
+
+def test_a_missing_access_key_names_the_environment_variable() -> None:
+    with pytest.raises(ScreenshotScoutConfigurationError) as captured:
+        ScreenshotScoutClient()
+
+    assert str(captured.value) == (
+        "A non-blank Screenshot Scout access key is required. Pass one, or set "
+        "SCREENSHOTSCOUT_ACCESS_KEY."
+    )
+
+
+def test_an_explicit_post_names_the_variable_a_secret_key_came_from(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SCREENSHOTSCOUT_ACCESS_KEY", "ak_env")
+    monkeypatch.setenv("SCREENSHOTSCOUT_SECRET_KEY", "sk_env")
+    http_client, requests = _recording_http_client()
+    try:
+        client = ScreenshotScoutClient(http_client=http_client)
+        with pytest.raises(ScreenshotScoutConfigurationError) as captured:
+            client.capture("https://example.com", method=CaptureHTTPMethod.POST)
+    finally:
+        http_client.close()
+
+    assert requests == []
+    assert str(captured.value) == (
+        "POST requests can't be signed. This client has a secret key from "
+        "SCREENSHOTSCOUT_SECRET_KEY: send this capture with method GET, or use a client without "
+        "a secret key and an API key that doesn't require signed requests."
+    )
+
+
+def test_debug_output_hides_both_keys() -> None:
+    http_client, _ = _recording_http_client()
+    try:
+        client = ScreenshotScoutClient("ak_hidden", secret_key="sk_hidden", http_client=http_client)
+        prepared = _prepare_request(client._configuration, "https://example.com", None, None)
+        output = "\n".join([repr(client), repr(client._configuration), repr(prepared)])
+    finally:
+        http_client.close()
+
+    assert prepared.headers["Authorization"] == "Bearer ak_hidden"
+    assert "ak_hidden" not in output
+    assert "sk_hidden" not in output
 
 
 def test_default_binary_response_retains_bytes_metadata_and_raw_response() -> None:

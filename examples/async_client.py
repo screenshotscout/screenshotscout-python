@@ -1,7 +1,6 @@
 """Use async Python I/O while waiting for the inline capture response."""
 
 import asyncio
-import os
 
 from screenshotscout import AsyncScreenshotScoutClient, BinaryCaptureResponse, CaptureOptions
 
@@ -9,7 +8,7 @@ from screenshotscout import AsyncScreenshotScoutClient, BinaryCaptureResponse, C
 async def main() -> None:
     options = CaptureOptions(full_page=True)
 
-    async with AsyncScreenshotScoutClient(os.environ["SCREENSHOTSCOUT_ACCESS_KEY"]) as client:
+    async with AsyncScreenshotScoutClient() as client:  # Reads SCREENSHOTSCOUT_ACCESS_KEY
         response = await client.capture("https://example.com", options)
 
     if not isinstance(response, BinaryCaptureResponse):

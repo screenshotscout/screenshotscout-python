@@ -20,5 +20,10 @@ def test_client_configuration_surface_is_fixed() -> None:
         "secret_key",
         "http_client",
     )
+    for client_class in (
+        screenshotscout.ScreenshotScoutClient,
+        screenshotscout.AsyncScreenshotScoutClient,
+    ):
+        assert signature(client_class).parameters["access_key"].default is None
     assert "RequestTimeout" not in screenshotscout.__all__
     assert not hasattr(screenshotscout, "RequestTimeout")

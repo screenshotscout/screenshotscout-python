@@ -5,9 +5,10 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import hmac
+import os
 import re
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from types import TracebackType
 from typing import Self
 
@@ -36,19 +37,23 @@ from .models import CaptureHTTPMethod, CaptureOptions, CaptureResponse
 
 _CAPTURE_ENDPOINT = "https://api.screenshotscout.com/v1/capture"
 _ACCESS_KEY_PATTERN = re.compile(r"[A-Za-z0-9\-._~+/]+=*")
+_ACCESS_KEY_VARIABLE = "SCREENSHOTSCOUT_ACCESS_KEY"
+_SECRET_KEY_VARIABLE = "SCREENSHOTSCOUT_SECRET_KEY"
 
 
 @dataclass(frozen=True, slots=True)
 class _ClientConfiguration:
-    access_key: str
-    secret_key: str | None
+    access_key: str = field(repr=False)
+    secret_key: str | None = field(repr=False)
+    secret_key_from_environment: bool
 
 
 @dataclass(frozen=True, slots=True)
 class _PreparedRequest:
     method: CaptureHTTPMethod
     url: str
-    headers: Mapping[str, str]
+    # Hidden from repr() because it carries the access key in the Authorization header.
+    headers: Mapping[str, str] = field(repr=False)
     content: bytes | None
     expected_kind: ExpectedResponseKind
 
@@ -60,11 +65,17 @@ class ScreenshotScoutClient:
 
     def __init__(
         self,
-        access_key: str,
+        access_key: str | None = None,
         *,
         secret_key: str | None = None,
         http_client: httpx.Client | None = None,
     ) -> None:
+        """Create a client.
+
+        When no key is passed, the client reads ``SCREENSHOTSCOUT_ACCESS_KEY`` and, if it's set,
+        ``SCREENSHOTSCOUT_SECRET_KEY``. Passing either key means neither variable is read.
+        """
+
         self._configuration = _build_configuration(
             access_key=access_key,
             secret_key=secret_key,
@@ -89,9 +100,13 @@ class ScreenshotScoutClient:
         target_url: str,
         options: CaptureOptions | None = None,
         *,
-        method: CaptureHTTPMethod = CaptureHTTPMethod.POST,
+        method: CaptureHTTPMethod | None = None,
     ) -> CaptureResponse:
-        """Capture ``target_url`` and return the buffered binary or JSON response."""
+        """Capture ``target_url`` and return the buffered binary or JSON response.
+
+        ``method`` defaults to POST, or GET when the client has a secret key, because POST
+        requests can't be signed.
+        """
 
         self._ensure_open()
         prepared = _prepare_request(self._configuration, target_url, options, method)
@@ -160,11 +175,17 @@ class AsyncScreenshotScoutClient:
 
     def __init__(
         self,
-        access_key: str,
+        access_key: str | None = None,
         *,
         secret_key: str | None = None,
         http_client: httpx.AsyncClient | None = None,
     ) -> None:
+        """Create a client.
+
+        When no key is passed, the client reads ``SCREENSHOTSCOUT_ACCESS_KEY`` and, if it's set,
+        ``SCREENSHOTSCOUT_SECRET_KEY``. Passing either key means neither variable is read.
+        """
+
         self._configuration = _build_configuration(
             access_key=access_key,
             secret_key=secret_key,
@@ -189,9 +210,13 @@ class AsyncScreenshotScoutClient:
         target_url: str,
         options: CaptureOptions | None = None,
         *,
-        method: CaptureHTTPMethod = CaptureHTTPMethod.POST,
+        method: CaptureHTTPMethod | None = None,
     ) -> CaptureResponse:
-        """Await the final inline capture response for ``target_url``."""
+        """Await the final inline capture response for ``target_url``.
+
+        ``method`` defaults to POST, or GET when the client has a secret key, because POST
+        requests can't be signed.
+        """
 
         self._ensure_open()
         prepared = _prepare_request(self._configuration, target_url, options, method)
@@ -259,7 +284,21 @@ def _build_configuration(
     *,
     access_key: object,
     secret_key: object,
+    environ: Mapping[str, str] = os.environ,
 ) -> _ClientConfiguration:
+    # Keys passed to the client always win: if either one is passed, neither variable is read.
+    # Only when both are None are both read from the environment.
+    secret_key_from_environment = False
+    if access_key is None and secret_key is None:
+        access_key = _read_key_variable(environ, _ACCESS_KEY_VARIABLE)
+        secret_key = _read_key_variable(environ, _SECRET_KEY_VARIABLE)
+        if access_key is None:
+            raise ScreenshotScoutConfigurationError(
+                "A non-blank Screenshot Scout access key is required. "
+                f"Pass one, or set {_ACCESS_KEY_VARIABLE}."
+            )
+        secret_key_from_environment = secret_key is not None
+
     if not isinstance(access_key, str) or not access_key.strip():
         raise ScreenshotScoutConfigurationError(
             "A non-blank Screenshot Scout access key is required."
@@ -284,21 +323,39 @@ def _build_configuration(
     return _ClientConfiguration(
         access_key=access_key,
         secret_key=secret_key,
+        secret_key_from_environment=secret_key_from_environment,
     )
+
+
+def _read_key_variable(environ: Mapping[str, str], name: str) -> str | None:
+    value = environ.get(name)
+    if not value:
+        return None
+    if not value.strip():
+        raise ScreenshotScoutConfigurationError(f"{name} is set but blank.")
+    return value
 
 
 def _prepare_request(
     configuration: _ClientConfiguration,
     target_url: str,
     options: CaptureOptions | None,
-    method: CaptureHTTPMethod,
+    method: CaptureHTTPMethod | None,
 ) -> _PreparedRequest:
     serialized = serialize_capture_options(target_url, options)
+    if method is None:
+        # Without a method, a client that signs sends GET, because POST requests can't be signed.
+        method = (
+            CaptureHTTPMethod.POST if configuration.secret_key is None else CaptureHTTPMethod.GET
+        )
     capture_method = serialize_capture_method(method)
     if configuration.secret_key is not None and capture_method is CaptureHTTPMethod.POST:
+        source = (
+            f" from {_SECRET_KEY_VARIABLE}" if configuration.secret_key_from_environment else ""
+        )
         raise ScreenshotScoutConfigurationError(
-            "POST requests can't be signed. This client has a secret key: send this capture "
-            "with method GET, or use a client without a secret key and an API key that "
+            f"POST requests can't be signed. This client has a secret key{source}: send this "
+            "capture with method GET, or use a client without a secret key and an API key that "
             "doesn't require signed requests."
         )
     signature = _create_signature(configuration, serialized.pairs)
