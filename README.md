@@ -170,6 +170,22 @@ If you pass either key, the client reads neither environment variable. If you pa
 example because the variable holding it is `None`, the client reads both environment variables
 instead.
 
+## Send requests to another server
+
+To send requests to another server, such as your own proxy or a mock server, pass its base URL, or
+set it as the `SCREENSHOTSCOUT_BASE_URL` environment variable:
+
+```python
+from screenshotscout import ScreenshotScoutClient
+
+# Reads SCREENSHOTSCOUT_ACCESS_KEY
+with ScreenshotScoutClient(base_url="https://proxy.example.com") as client:
+    response = client.capture("https://example.com")
+```
+
+The client sends captures to the base URL plus `/v1/capture`, and `build_capture_url()` builds URLs
+on it. A base URL you pass wins over the variable.
+
 ## Capture options
 
 The target URL is the first argument to `capture()`. Use `CaptureOptions` keyword arguments to

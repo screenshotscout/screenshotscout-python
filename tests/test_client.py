@@ -100,6 +100,8 @@ def test_configuration_validates_access_key(
 def test_configuration_validates_optional_values() -> None:
     with pytest.raises(ScreenshotScoutConfigurationError, match="secret key"):
         ScreenshotScoutClient("key", secret_key="")
+    with pytest.raises(ScreenshotScoutConfigurationError, match="base URL must be a string"):
+        ScreenshotScoutClient("key", base_url=cast(Any, 0))
     with pytest.raises(ScreenshotScoutConfigurationError, match="httpx.Client"):
         ScreenshotScoutClient("key", http_client=cast(Any, object()))
 
@@ -513,7 +515,7 @@ def test_secret_key_sends_a_signed_get_when_no_method_is_chosen() -> None:
     assert requests[0].url.params["signature"] == _EXPECTED_SIGNATURE
 
 
-def test_without_keys_the_client_reads_both_environment_variables_once(
+def test_without_keys_the_client_reads_both_key_variables_once(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("SCREENSHOTSCOUT_ACCESS_KEY", "ak_test")
@@ -546,7 +548,7 @@ def test_a_client_with_no_arguments_reads_the_environment(
     assert not any(name == "signature" for name, _ in pairs)
 
 
-def test_passing_either_key_means_the_environment_is_never_read(
+def test_passing_either_key_means_no_key_variable_is_read(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("SCREENSHOTSCOUT_ACCESS_KEY", "ak_env")
@@ -594,6 +596,174 @@ def test_an_explicit_post_names_the_variable_a_secret_key_came_from(
         "SCREENSHOTSCOUT_SECRET_KEY: send this capture with method GET, or use a client without "
         "a secret key and an API key that doesn't require signed requests."
     )
+
+
+def test_a_base_url_sends_post_get_and_built_urls_to_that_server() -> None:
+    http_client, requests = _recording_http_client()
+    try:
+        client = ScreenshotScoutClient(
+            "ak_test",
+            base_url="http://localhost:8787/",
+            http_client=http_client,
+        )
+        client.capture("https://example.com")
+        client.capture("https://example.com", method=CaptureHTTPMethod.GET)
+        built_url = client.build_capture_url("https://example.com")
+    finally:
+        http_client.close()
+
+    assert [request.method for request in requests] == ["POST", "GET"]
+    assert [str(request.url) for request in requests] == [
+        "http://localhost:8787/v1/capture",
+        "http://localhost:8787/v1/capture?url=https%3A%2F%2Fexample.com",
+    ]
+    assert built_url == (
+        "http://localhost:8787/v1/capture?access_key=ak_test&url=https%3A%2F%2Fexample.com"
+    )
+
+
+def test_a_base_url_keeps_its_path_and_leaves_signing_unchanged() -> None:
+    http_client, requests = _recording_http_client(_json_response)
+    try:
+        client = ScreenshotScoutClient(
+            "ak_test",
+            secret_key="sk_test",
+            base_url="https://proxy.example.com/screenshotscout//",
+            http_client=http_client,
+        )
+        client.capture(_SIGNED_TARGET_URL, _signed_options())
+        built_url = client.build_capture_url(_SIGNED_TARGET_URL, _signed_options())
+    finally:
+        http_client.close()
+
+    signed_query = (
+        "url=https%3A%2F%2Fexample.com%2Fa%20b%3Fx%3D1%26y%3D2"
+        "&response_type=json&headers=X-Test%3Aone&headers=X-Test%3Atwo&delay=0&full_page=false"
+        f"&signature={_EXPECTED_SIGNATURE}"
+    )
+    assert requests[0].method == "GET"
+    assert str(requests[0].url) == (
+        f"https://proxy.example.com/screenshotscout/v1/capture?{signed_query}"
+    )
+    assert built_url == (
+        f"https://proxy.example.com/screenshotscout/v1/capture?access_key=ak_test&{signed_query}"
+    )
+
+
+@pytest.mark.parametrize("base_url", ["", None])
+def test_an_empty_base_url_means_the_screenshot_scout_api(base_url: str | None) -> None:
+    http_client, requests = _recording_http_client()
+    try:
+        client = ScreenshotScoutClient("key", base_url=base_url, http_client=http_client)
+        client.capture("https://example.com")
+    finally:
+        http_client.close()
+
+    assert str(requests[0].url) == "https://api.screenshotscout.com/v1/capture"
+
+
+def test_without_a_base_url_the_client_reads_the_variable_once_even_with_keys_passed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SCREENSHOTSCOUT_BASE_URL", "http://localhost:8787")
+    http_client, requests = _recording_http_client()
+    try:
+        client = ScreenshotScoutClient("ak_code", http_client=http_client)
+        monkeypatch.setenv("SCREENSHOTSCOUT_BASE_URL", "http://changed.example")
+        client.capture("https://example.com")
+        built_url = client.build_capture_url("https://example.com")
+    finally:
+        http_client.close()
+
+    assert str(requests[0].url) == "http://localhost:8787/v1/capture"
+    assert built_url == (
+        "http://localhost:8787/v1/capture?access_key=ak_code&url=https%3A%2F%2Fexample.com"
+    )
+
+
+def test_a_base_url_passed_in_code_wins_over_the_variable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SCREENSHOTSCOUT_BASE_URL", "http://localhost:8787")
+    http_client, requests = _recording_http_client()
+    try:
+        client = ScreenshotScoutClient(
+            "key",
+            base_url="https://proxy.example.com",
+            http_client=http_client,
+        )
+        client.capture("https://example.com")
+    finally:
+        http_client.close()
+
+    assert str(requests[0].url) == "https://proxy.example.com/v1/capture"
+
+
+def test_an_empty_base_url_variable_means_the_api_and_a_blank_one_is_an_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SCREENSHOTSCOUT_BASE_URL", "")
+    http_client, requests = _recording_http_client()
+    try:
+        client = ScreenshotScoutClient("key", http_client=http_client)
+        client.capture("https://example.com")
+    finally:
+        http_client.close()
+    monkeypatch.setenv("SCREENSHOTSCOUT_BASE_URL", " \t")
+    with pytest.raises(ScreenshotScoutConfigurationError) as blank:
+        ScreenshotScoutClient("key")
+
+    assert str(requests[0].url) == "https://api.screenshotscout.com/v1/capture"
+    assert str(blank.value) == "SCREENSHOTSCOUT_BASE_URL is set but blank."
+
+
+@pytest.mark.parametrize(
+    ("variable", "base_url", "suffix"),
+    [
+        (None, None, ""),
+        ("http://localhost:8787", None, " The base URL comes from SCREENSHOTSCOUT_BASE_URL."),
+        ("http://localhost:8787", "http://localhost:8787", ""),
+    ],
+    ids=["api", "variable", "passed"],
+)
+def test_a_transport_failure_names_the_base_url_variable_only_when_it_was_used(
+    monkeypatch: pytest.MonkeyPatch,
+    variable: str | None,
+    base_url: str | None,
+    suffix: str,
+) -> None:
+    native_cause = RuntimeError("socket closed")
+
+    def response_factory(_request: httpx.Request) -> httpx.Response:
+        raise native_cause
+
+    if variable is not None:
+        monkeypatch.setenv("SCREENSHOTSCOUT_BASE_URL", variable)
+    http_client, _ = _recording_http_client(response_factory)
+    try:
+        client = ScreenshotScoutClient("key", base_url=base_url, http_client=http_client)
+        with pytest.raises(ScreenshotScoutTransportError) as captured:
+            client.capture("https://example.com")
+    finally:
+        http_client.close()
+
+    assert str(captured.value) == (
+        f"Screenshot Scout request failed before an HTTP response body was received.{suffix}"
+    )
+    assert captured.value.cause is native_cause
+    assert captured.value.__cause__ is native_cause
+
+
+def test_a_malformed_base_url_is_a_transport_error_and_built_as_given() -> None:
+    # The SDK's own HTTPX client rejects the URL before connecting to anything.
+    with ScreenshotScoutClient("key", base_url="not a url") as client:
+        with pytest.raises(ScreenshotScoutTransportError) as captured:
+            client.capture("https://example.com")
+        built_url = client.build_capture_url("https://example.com")
+
+    assert isinstance(captured.value.cause, httpx.UnsupportedProtocol)
+    assert captured.value.__cause__ is captured.value.cause
+    assert built_url == "not a url/v1/capture?access_key=key&url=https%3A%2F%2Fexample.com"
 
 
 def test_debug_output_hides_both_keys() -> None:

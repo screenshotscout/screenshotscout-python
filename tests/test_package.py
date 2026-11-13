@@ -13,11 +13,13 @@ def test_client_configuration_surface_is_fixed() -> None:
     assert tuple(signature(screenshotscout.ScreenshotScoutClient).parameters) == (
         "access_key",
         "secret_key",
+        "base_url",
         "http_client",
     )
     assert tuple(signature(screenshotscout.AsyncScreenshotScoutClient).parameters) == (
         "access_key",
         "secret_key",
+        "base_url",
         "http_client",
     )
     for client_class in (

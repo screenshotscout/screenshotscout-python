@@ -35,10 +35,12 @@ from .errors import (
 )
 from .models import CaptureHTTPMethod, CaptureOptions, CaptureResponse
 
-_CAPTURE_ENDPOINT = "https://api.screenshotscout.com/v1/capture"
+_DEFAULT_BASE_URL = "https://api.screenshotscout.com"
+_CAPTURE_PATH = "/v1/capture"
 _ACCESS_KEY_PATTERN = re.compile(r"[A-Za-z0-9\-._~+/]+=*")
 _ACCESS_KEY_VARIABLE = "SCREENSHOTSCOUT_ACCESS_KEY"
 _SECRET_KEY_VARIABLE = "SCREENSHOTSCOUT_SECRET_KEY"
+_BASE_URL_VARIABLE = "SCREENSHOTSCOUT_BASE_URL"
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,6 +48,8 @@ class _ClientConfiguration:
     access_key: str = field(repr=False)
     secret_key: str | None = field(repr=False)
     secret_key_from_environment: bool
+    capture_endpoint: str
+    base_url_from_environment: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,17 +72,23 @@ class ScreenshotScoutClient:
         access_key: str | None = None,
         *,
         secret_key: str | None = None,
+        base_url: str | None = None,
         http_client: httpx.Client | None = None,
     ) -> None:
         """Create a client.
 
         When no key is passed, the client reads ``SCREENSHOTSCOUT_ACCESS_KEY`` and, if it's set,
         ``SCREENSHOTSCOUT_SECRET_KEY``. Passing either key means neither variable is read.
+
+        ``base_url`` sends requests to another server, such as your own proxy or a mock server.
+        Captures go to this URL plus ``/v1/capture``, and ``build_capture_url()`` builds URLs on
+        it. It defaults to ``SCREENSHOTSCOUT_BASE_URL``, then to the Screenshot Scout API.
         """
 
         self._configuration = _build_configuration(
             access_key=access_key,
             secret_key=secret_key,
+            base_url=base_url,
         )
         if http_client is not None and not isinstance(http_client, httpx.Client):
             raise ScreenshotScoutConfigurationError(
@@ -121,7 +131,7 @@ class ScreenshotScoutClient:
             body = response.read()
         except Exception as cause:
             error = ScreenshotScoutTransportError(
-                "Screenshot Scout request failed before an HTTP response body was received.",
+                _transport_error_message(self._configuration),
                 cause,
             )
             raise error from cause
@@ -178,17 +188,23 @@ class AsyncScreenshotScoutClient:
         access_key: str | None = None,
         *,
         secret_key: str | None = None,
+        base_url: str | None = None,
         http_client: httpx.AsyncClient | None = None,
     ) -> None:
         """Create a client.
 
         When no key is passed, the client reads ``SCREENSHOTSCOUT_ACCESS_KEY`` and, if it's set,
         ``SCREENSHOTSCOUT_SECRET_KEY``. Passing either key means neither variable is read.
+
+        ``base_url`` sends requests to another server, such as your own proxy or a mock server.
+        Captures go to this URL plus ``/v1/capture``, and ``build_capture_url()`` builds URLs on
+        it. It defaults to ``SCREENSHOTSCOUT_BASE_URL``, then to the Screenshot Scout API.
         """
 
         self._configuration = _build_configuration(
             access_key=access_key,
             secret_key=secret_key,
+            base_url=base_url,
         )
         if http_client is not None and not isinstance(http_client, httpx.AsyncClient):
             raise ScreenshotScoutConfigurationError(
@@ -233,7 +249,7 @@ class AsyncScreenshotScoutClient:
             raise
         except Exception as cause:
             error = ScreenshotScoutTransportError(
-                "Screenshot Scout request failed before an HTTP response body was received.",
+                _transport_error_message(self._configuration),
                 cause,
             )
             raise error from cause
@@ -284,14 +300,15 @@ def _build_configuration(
     *,
     access_key: object,
     secret_key: object,
+    base_url: object = None,
     environ: Mapping[str, str] = os.environ,
 ) -> _ClientConfiguration:
     # Keys passed to the client always win: if either one is passed, neither variable is read.
     # Only when both are None are both read from the environment.
     secret_key_from_environment = False
     if access_key is None and secret_key is None:
-        access_key = _read_key_variable(environ, _ACCESS_KEY_VARIABLE)
-        secret_key = _read_key_variable(environ, _SECRET_KEY_VARIABLE)
+        access_key = _read_variable(environ, _ACCESS_KEY_VARIABLE)
+        secret_key = _read_variable(environ, _SECRET_KEY_VARIABLE)
         if access_key is None:
             raise ScreenshotScoutConfigurationError(
                 "A non-blank Screenshot Scout access key is required. "
@@ -320,20 +337,46 @@ def _build_configuration(
         )
         raise error from cause
 
+    # Resolved after the keys, so key errors come first.
+    capture_endpoint, base_url_from_environment = _resolve_capture_endpoint(base_url, environ)
+
     return _ClientConfiguration(
         access_key=access_key,
         secret_key=secret_key,
         secret_key_from_environment=secret_key_from_environment,
+        capture_endpoint=capture_endpoint,
+        base_url_from_environment=base_url_from_environment,
     )
 
 
-def _read_key_variable(environ: Mapping[str, str], name: str) -> str | None:
+def _read_variable(environ: Mapping[str, str], name: str) -> str | None:
     value = environ.get(name)
     if not value:
         return None
     if not value.strip():
         raise ScreenshotScoutConfigurationError(f"{name} is set but blank.")
     return value
+
+
+def _resolve_capture_endpoint(base_url: object, environ: Mapping[str, str]) -> tuple[str, bool]:
+    # Returns the capture endpoint and whether its base URL came from the environment. A base URL
+    # passed to the client wins. Without one, the variable is read, whether or not keys were
+    # passed, and without that the Screenshot Scout API is used.
+    if base_url is not None and not isinstance(base_url, str):
+        raise ScreenshotScoutConfigurationError(
+            "The Screenshot Scout base URL must be a string when provided."
+        )
+    if base_url:
+        return _append_capture_path(base_url), False
+    environment_base_url = _read_variable(environ, _BASE_URL_VARIABLE)
+    if environment_base_url is not None:
+        return _append_capture_path(environment_base_url), True
+    return _append_capture_path(_DEFAULT_BASE_URL), False
+
+
+def _append_capture_path(base_url: str) -> str:
+    # The base URL is used as given, never parsed: only trailing slashes are removed.
+    return base_url.rstrip("/") + _CAPTURE_PATH
 
 
 def _prepare_request(
@@ -368,11 +411,11 @@ def _prepare_request(
         if signature is not None:
             pairs.append(("signature", signature))
         query = encode_query_pairs(pairs)
-        url = f"{_CAPTURE_ENDPOINT}?{query}"
+        url = f"{configuration.capture_endpoint}?{query}"
         content = None
     else:
         headers["Content-Type"] = "application/json"
-        url = _CAPTURE_ENDPOINT
+        url = configuration.capture_endpoint
         content = encode_json_body(serialized.body)
 
     return _PreparedRequest(
@@ -397,7 +440,7 @@ def _build_capture_url(
     ]
     if signature is not None:
         pairs.append(("signature", signature))
-    return f"{_CAPTURE_ENDPOINT}?{encode_query_pairs(pairs)}"
+    return f"{configuration.capture_endpoint}?{encode_query_pairs(pairs)}"
 
 
 def _create_signature(
@@ -425,3 +468,10 @@ def _expected_response_kind(options: CaptureOptions | None) -> ExpectedResponseK
     if response_type == "json":
         return "json"
     return None
+
+
+def _transport_error_message(configuration: _ClientConfiguration) -> str:
+    message = "Screenshot Scout request failed before an HTTP response body was received."
+    if configuration.base_url_from_environment:
+        message += f" The base URL comes from {_BASE_URL_VARIABLE}."
+    return message
