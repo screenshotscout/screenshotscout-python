@@ -22,6 +22,7 @@ class CaptureFormat:
     GIF: Final[str] = "gif"
     JPEG: Final[str] = "jpeg"
     JPG: Final[str] = "jpg"
+    MD: Final[str] = "md"
     PDF: Final[str] = "pdf"
     PNG: Final[str] = "png"
     TIFF: Final[str] = "tiff"
@@ -239,6 +240,7 @@ class BinaryCaptureResponse:
     screenshot_url: str | None = None
     screenshot_url_expires_at: str | None = None
     cache_status: str | None = None
+    markdown: str | None = None
     kind: Literal["binary"] = field(default="binary", init=False)
 
 

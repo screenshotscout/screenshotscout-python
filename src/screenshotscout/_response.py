@@ -88,6 +88,11 @@ def _decode_binary_response(raw_response: RawResponse) -> BinaryCaptureResponse:
             "screenshot-scout-screenshot-url-expires-at",
         ),
         cache_status=_first_header(raw_response, "screenshot-scout-cache-status"),
+        markdown=(
+            raw_response.body.decode("utf-8", errors="replace")
+            if _is_markdown_media_type(raw_response.content_type)
+            else None
+        ),
         raw_response=raw_response,
     )
 
@@ -159,6 +164,12 @@ def _is_json_media_type(content_type: str | None) -> bool:
         return False
     media_type = content_type.split(";", 1)[0].strip().lower()
     return media_type == "application/json" or media_type.endswith("+json")
+
+
+def _is_markdown_media_type(content_type: str | None) -> bool:
+    if content_type is None:
+        return False
+    return content_type.split(";", 1)[0].strip().lower() == "text/markdown"
 
 
 def _try_parse_json(body: bytes) -> tuple[bool, Any, Exception | None]:

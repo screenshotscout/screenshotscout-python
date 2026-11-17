@@ -53,6 +53,34 @@ Path("screenshot.webp").write_bytes(response.bytes)
 POST is used by default, or GET when the client has a secret key. The screenshot is available as
 `response.bytes`.
 
+## Get a page as Markdown
+
+Set `format` to `CaptureFormat.MD` to get the page as Markdown:
+
+```python
+from pathlib import Path
+
+from screenshotscout import (
+    BinaryCaptureResponse,
+    CaptureFormat,
+    CaptureOptions,
+    ScreenshotScoutClient,
+)
+
+with ScreenshotScoutClient() as client:  # Reads SCREENSHOTSCOUT_ACCESS_KEY
+    response = client.capture(
+        "https://example.com",
+        CaptureOptions(format=CaptureFormat.MD),
+    )
+
+if not isinstance(response, BinaryCaptureResponse) or response.markdown is None:
+    raise RuntimeError("Expected a Markdown capture response")
+
+Path("page.md").write_text(response.markdown, encoding="utf-8")
+```
+
+The Markdown text is available as `response.markdown`, which is `None` for other formats.
+
 ## Request a JSON result
 
 Set `response_type` to `CaptureResponseType.JSON` to receive screenshot metadata instead of the
@@ -242,7 +270,7 @@ If your application needs network timeouts, configure them on an injected `httpx
 ## Responses
 
 - `BinaryCaptureResponse` provides the screenshot as `bytes`, along with URL, expiry, and cache
-  information when available.
+  information when available. For Markdown, it also provides the text as `markdown`.
 - `JsonCaptureResponse` provides screenshot metadata in `result`.
 
 Both response types include `raw_response` for access to the HTTP status, headers, content type,

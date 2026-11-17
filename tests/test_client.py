@@ -814,6 +814,7 @@ def test_default_binary_response_retains_bytes_metadata_and_raw_response() -> No
     assert response.screenshot_url == "https://cdn.example/screenshot.png"
     assert response.screenshot_url_expires_at == "2026-07-14T00:00:00Z"
     assert response.cache_status == "HIT"
+    assert response.markdown is None
     assert response.raw_response.status == 201
     assert response.raw_response.status_text == "Created"
     assert response.raw_response.content_type == "image/png"
@@ -822,6 +823,29 @@ def test_default_binary_response_retains_bytes_metadata_and_raw_response() -> No
         "a=1; Path=/",
         "b=2; Path=/",
     )
+
+
+@pytest.mark.parametrize("content_type", ["text/markdown; charset=utf-8", "TEXT/MARKDOWN"])
+def test_markdown_binary_response_provides_the_decoded_text(content_type: str) -> None:
+    body = "# Привет\n\nHello, world.\n".encode()
+
+    def response_factory(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=body, headers={"content-type": content_type})
+
+    http_client, _ = _recording_http_client(response_factory)
+    try:
+        client = ScreenshotScoutClient("key", http_client=http_client)
+        response = client.capture(
+            "https://example.com",
+            CaptureOptions(format=CaptureFormat.MD),
+        )
+    finally:
+        http_client.close()
+
+    assert isinstance(response, BinaryCaptureResponse)
+    assert response.markdown == "# Привет\n\nHello, world.\n"
+    assert response.bytes == body
+    assert response.raw_response.body == body
 
 
 def test_explicit_json_response_retains_documented_and_additional_fields() -> None:
@@ -1047,4 +1071,5 @@ def test_options_are_slotted_and_service_string_values_remain_open() -> None:
     assert not hasattr(options, "__dict__")
     assert options.format == "future-format"
     assert CaptureFormat.WEBP == "webp"
+    assert CaptureFormat.MD == "md"
     assert CaptureHTTPMethod.GET.value == "GET"
