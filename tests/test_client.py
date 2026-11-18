@@ -815,6 +815,7 @@ def test_default_binary_response_retains_bytes_metadata_and_raw_response() -> No
     assert response.screenshot_url_expires_at == "2026-07-14T00:00:00Z"
     assert response.cache_status == "HIT"
     assert response.markdown is None
+    assert response.html is None
     assert response.raw_response.status == 201
     assert response.raw_response.status_text == "Created"
     assert response.raw_response.content_type == "image/png"
@@ -844,6 +845,31 @@ def test_markdown_binary_response_provides_the_decoded_text(content_type: str) -
 
     assert isinstance(response, BinaryCaptureResponse)
     assert response.markdown == "# Привет\n\nHello, world.\n"
+    assert response.html is None
+    assert response.bytes == body
+    assert response.raw_response.body == body
+
+
+@pytest.mark.parametrize("content_type", ["text/html; charset=utf-8", "TEXT/HTML; charset=UTF-8"])
+def test_html_binary_response_provides_the_decoded_text(content_type: str) -> None:
+    body = "<h1>Привет</h1>\n<p>Hello, world.</p>\n".encode()
+
+    def response_factory(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=body, headers={"content-type": content_type})
+
+    http_client, _ = _recording_http_client(response_factory)
+    try:
+        client = ScreenshotScoutClient("key", http_client=http_client)
+        response = client.capture(
+            "https://example.com",
+            CaptureOptions(format=CaptureFormat.HTML),
+        )
+    finally:
+        http_client.close()
+
+    assert isinstance(response, BinaryCaptureResponse)
+    assert response.html == "<h1>Привет</h1>\n<p>Hello, world.</p>\n"
+    assert response.markdown is None
     assert response.bytes == body
     assert response.raw_response.body == body
 
@@ -1072,4 +1098,5 @@ def test_options_are_slotted_and_service_string_values_remain_open() -> None:
     assert options.format == "future-format"
     assert CaptureFormat.WEBP == "webp"
     assert CaptureFormat.MD == "md"
+    assert CaptureFormat.HTML == "html"
     assert CaptureHTTPMethod.GET.value == "GET"

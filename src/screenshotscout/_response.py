@@ -93,6 +93,11 @@ def _decode_binary_response(raw_response: RawResponse) -> BinaryCaptureResponse:
             if _is_markdown_media_type(raw_response.content_type)
             else None
         ),
+        html=(
+            raw_response.body.decode("utf-8", errors="replace")
+            if _is_html_media_type(raw_response.content_type)
+            else None
+        ),
         raw_response=raw_response,
     )
 
@@ -170,6 +175,12 @@ def _is_markdown_media_type(content_type: str | None) -> bool:
     if content_type is None:
         return False
     return content_type.split(";", 1)[0].strip().lower() == "text/markdown"
+
+
+def _is_html_media_type(content_type: str | None) -> bool:
+    if content_type is None:
+        return False
+    return content_type.split(";", 1)[0].strip().lower() == "text/html"
 
 
 def _try_parse_json(body: bytes) -> tuple[bool, Any, Exception | None]:

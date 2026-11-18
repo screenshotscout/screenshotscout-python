@@ -20,6 +20,7 @@ class CaptureFormat:
     """Documented capture format values; raw strings remain supported."""
 
     GIF: Final[str] = "gif"
+    HTML: Final[str] = "html"
     JPEG: Final[str] = "jpeg"
     JPG: Final[str] = "jpg"
     MD: Final[str] = "md"
@@ -241,6 +242,7 @@ class BinaryCaptureResponse:
     screenshot_url_expires_at: str | None = None
     cache_status: str | None = None
     markdown: str | None = None
+    html: str | None = None
     kind: Literal["binary"] = field(default="binary", init=False)
 
 
