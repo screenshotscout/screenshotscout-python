@@ -106,7 +106,7 @@ class CaptureStorageMode:
 class CaptureOptions:
     """Typed Screenshot Scout service options.
 
-    ``url``, ``access_key``, and ``signature`` are deliberately not capture options.
+    ``url``, ``html``, ``access_key``, and ``signature`` are deliberately not capture options.
     Values are sent without service-semantic validation or normalization.
     """
 

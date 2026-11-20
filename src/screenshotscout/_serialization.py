@@ -7,7 +7,7 @@ import math
 from collections.abc import Sequence
 from dataclasses import dataclass, fields
 from decimal import Decimal
-from typing import TypeAlias
+from typing import Literal, TypeAlias
 
 from .errors import ScreenshotScoutSerializationError
 from .models import CaptureHTTPMethod, CaptureOptions
@@ -15,6 +15,8 @@ from .models import CaptureHTTPMethod, CaptureOptions
 WireScalar: TypeAlias = str | int | float | bool
 WireJSONValue: TypeAlias = WireScalar | list[str]
 WirePair: TypeAlias = tuple[str, str]
+# What to capture: a page's URL, or an HTML document. It's written first, before the options.
+_CaptureTarget: TypeAlias = tuple[Literal["url", "html"], str]
 
 _MAX_SAFE_INTEGER = 9_007_199_254_740_991
 _REPEATED_OPTIONS = frozenset(
@@ -48,13 +50,43 @@ def serialize_capture_options(
             "The capture target URL must be a string.",
             "url",
         )
+    return _serialize_target_and_options(("url", target_url), options)
+
+
+def serialize_html_capture_options(
+    html: str,
+    options: CaptureOptions | None,
+) -> SerializedCaptureOptions:
+    """Serialize an HTML document, kept exactly as given, and typed options."""
+
+    if not isinstance(html, str):
+        raise ScreenshotScoutSerializationError(
+            "The HTML to capture must be a string.",
+            "html",
+        )
+    try:
+        html.encode("utf-8")
+    except UnicodeEncodeError as cause:
+        error = ScreenshotScoutSerializationError(
+            "The HTML to capture must contain valid Unicode text.",
+            "html",
+        )
+        raise error from cause
+    return _serialize_target_and_options(("html", html), options)
+
+
+def _serialize_target_and_options(
+    target: _CaptureTarget,
+    options: CaptureOptions | None,
+) -> SerializedCaptureOptions:
     if options is not None and not isinstance(options, CaptureOptions):
         raise ScreenshotScoutSerializationError(
             "Capture options must be a CaptureOptions instance when provided."
         )
 
-    pairs: list[WirePair] = [("url", target_url)]
-    body: dict[str, WireJSONValue] = {"url": target_url}
+    target_name, target_value = target
+    pairs: list[WirePair] = [(target_name, target_value)]
+    body: dict[str, WireJSONValue] = {target_name: target_value}
     if options is None:
         return SerializedCaptureOptions(tuple(pairs), body)
 

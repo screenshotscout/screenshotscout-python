@@ -77,6 +77,52 @@ if not isinstance(response, JsonCaptureResponse):
 print(response.result.screenshot_url)
 ```
 
+## Capture from HTML
+
+To render HTML you generated, such as an invoice or a report, call `capture_from_html()` with the
+document instead of a URL. It takes the same options as `capture()`:
+
+```python
+from pathlib import Path
+
+from screenshotscout import (
+    BinaryCaptureResponse,
+    CaptureFormat,
+    CaptureOptions,
+    ScreenshotScoutClient,
+)
+
+html = """<!doctype html>
+<html>
+  <head>
+    <title>Invoice #1042</title>
+  </head>
+  <body>
+    <h1>Invoice #1042</h1>
+    <p>Total due: $480.00</p>
+  </body>
+</html>"""
+
+with ScreenshotScoutClient() as client:  # Reads SCREENSHOTSCOUT_ACCESS_KEY
+    response = client.capture_from_html(
+        html,
+        CaptureOptions(format=CaptureFormat.PDF),
+    )
+
+if not isinstance(response, BinaryCaptureResponse):
+    raise RuntimeError("Expected a binary capture response")
+
+Path("invoice.pdf").write_bytes(response.bytes)
+```
+
+Send a complete document that starts with `<!doctype html>`. A PDF takes its title from `<title>`.
+The page has no URL, so use absolute URLs for images, stylesheets and fonts, or add a
+`<base href>`. See [How to Render HTML](https://screenshotscout.com/docs/guides/render-html) for
+more.
+
+The HTML is sent in a POST request, which can't be signed. So `capture_from_html()` needs a client
+without a secret key, and an API key that doesn't require signed requests.
+
 ## Async client
 
 Use `AsyncScreenshotScoutClient` in applications that use `asyncio`. `await capture()` waits for
@@ -280,6 +326,7 @@ Runnable programs are available in [`examples`](examples):
 - [`json_capture.py`](examples/json_capture.py)
 - [`async_client.py`](examples/async_client.py)
 - [`capture_url.py`](examples/capture_url.py)
+- [`capture_from_html.py`](examples/capture_from_html.py)
 
 ## Development
 

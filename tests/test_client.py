@@ -31,6 +31,11 @@ ResponseFactory = Callable[[httpx.Request], httpx.Response]
 _SIGNED_TARGET_URL = "https://example.com/a b?x=1&y=2"
 _EXPECTED_SIGNATURE = "6419f2ac8c0440f1e341b547630606c9dc74dacfbb2df8e122fc9ae26831d893"
 
+_INVOICE_HTML = (
+    "<!doctype html>\n<html><head><title>Invoice #1042</title></head>"
+    '<body><h1>Invoice #1042 for Zoë & "Café"</h1></body></html>\n'
+)
+
 
 def _signed_options() -> CaptureOptions:
     return CaptureOptions(
@@ -53,6 +58,17 @@ def _json_response(_request: httpx.Request) -> httpx.Response:
     return httpx.Response(
         200,
         content=b"{}",
+        headers={"content-type": "application/json"},
+    )
+
+
+def _request_too_large_response(_request: httpx.Request) -> httpx.Response:
+    return httpx.Response(
+        413,
+        content=(
+            b'{"error_code":"request_too_large",'
+            b'"error_message":"The request body must be at most 5 MB."}'
+        ),
         headers={"content-type": "application/json"},
     )
 
@@ -1100,3 +1116,208 @@ def test_options_are_slotted_and_service_string_values_remain_open() -> None:
     assert CaptureFormat.MD == "md"
     assert CaptureFormat.HTML == "html"
     assert CaptureHTTPMethod.GET.value == "GET"
+
+
+def test_capture_from_html_sends_the_html_first_in_a_post_body_exactly_as_given() -> None:
+    html = f"  {_INVOICE_HTML}  "
+    http_client, requests = _recording_http_client()
+    try:
+        client = ScreenshotScoutClient("ak_test", http_client=http_client)
+        response = client.capture_from_html(
+            html,
+            CaptureOptions(
+                format=CaptureFormat.PDF,
+                cookies=["session=abc; Domain=example.com"],
+                pdf_print_background=True,
+            ),
+        )
+    finally:
+        http_client.close()
+
+    assert isinstance(response, BinaryCaptureResponse)
+    assert len(requests) == 1
+    request = requests[0]
+    assert request.method == "POST"
+    assert str(request.url) == "https://api.screenshotscout.com/v1/capture"
+    assert request.url.query == b""
+    assert request.headers["authorization"] == "Bearer ak_test"
+    assert request.headers["content-type"] == "application/json"
+    body = _json_request_body(request)
+    assert list(body) == ["html", "format", "cookies", "pdf_print_background"]
+    assert body == {
+        "html": html,
+        "format": "pdf",
+        "cookies": ["session=abc; Domain=example.com"],
+        "pdf_print_background": True,
+    }
+    # HTML characters and non-ASCII text are written as they are, not as \u escapes.
+    assert request.content.startswith(
+        b'{"html":"  <!doctype html>\\n<html><head><title>Invoice #1042</title>'
+    )
+    assert 'Invoice #1042 for Zoë & \\"Café\\"</h1>'.encode() in request.content
+
+
+def test_capture_from_html_decodes_responses_the_same_way_as_capture() -> None:
+    def response_factory(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            content=b"%PDF-1.7",
+            headers={
+                "content-type": "application/pdf",
+                "screenshot-scout-screenshot-url": "https://cdn.example/invoice.pdf",
+            },
+        )
+
+    http_client, _ = _recording_http_client(response_factory)
+    try:
+        client = ScreenshotScoutClient("key", http_client=http_client)
+        response = client.capture_from_html(
+            _INVOICE_HTML,
+            CaptureOptions(format=CaptureFormat.PDF),
+        )
+    finally:
+        http_client.close()
+
+    assert isinstance(response, BinaryCaptureResponse)
+    assert response.kind == "binary"
+    assert response.bytes == b"%PDF-1.7"
+    assert response.screenshot_url == "https://cdn.example/invoice.pdf"
+    assert response.html is None
+    assert response.raw_response.content_type == "application/pdf"
+
+
+def test_capture_from_html_refuses_before_sending_when_the_client_has_a_secret_key() -> None:
+    http_client, requests = _recording_http_client()
+    try:
+        client = ScreenshotScoutClient("ak_test", secret_key="sk_test", http_client=http_client)
+        with pytest.raises(ScreenshotScoutConfigurationError) as captured:
+            client.capture_from_html(_INVOICE_HTML)
+    finally:
+        http_client.close()
+
+    assert requests == []
+    assert str(captured.value) == (
+        "`capture_from_html` sends the HTML in a POST body, which can't be signed. This client "
+        "has a secret key: use a client without a secret key and an API key that doesn't "
+        "require signed requests."
+    )
+
+
+def test_capture_from_html_names_the_variable_a_secret_key_came_from(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SCREENSHOTSCOUT_ACCESS_KEY", "ak_env")
+    monkeypatch.setenv("SCREENSHOTSCOUT_SECRET_KEY", "sk_env")
+    http_client, requests = _recording_http_client()
+    try:
+        client = ScreenshotScoutClient(http_client=http_client)
+        with pytest.raises(ScreenshotScoutConfigurationError) as captured:
+            client.capture_from_html(_INVOICE_HTML)
+    finally:
+        http_client.close()
+
+    assert requests == []
+    assert str(captured.value) == (
+        "`capture_from_html` sends the HTML in a POST body, which can't be signed. This client "
+        "has a secret key from SCREENSHOTSCOUT_SECRET_KEY: use a client without a secret key "
+        "and an API key that doesn't require signed requests."
+    )
+
+
+@pytest.mark.parametrize("html", [None, 42, b"<p>Invoice</p>", ["<p>Invoice</p>"]])
+def test_capture_from_html_requires_a_string(html: object) -> None:
+    http_client, requests = _recording_http_client()
+    try:
+        client = ScreenshotScoutClient("key", http_client=http_client)
+        with pytest.raises(ScreenshotScoutSerializationError) as captured:
+            client.capture_from_html(cast(Any, html))
+    finally:
+        http_client.close()
+
+    assert requests == []
+    assert captured.value.option == "html"
+    assert str(captured.value) == "The HTML to capture must be a string."
+
+
+@pytest.mark.parametrize(
+    "html",
+    [
+        "<p>Invoice \ud800</p>",
+        "<p>Invoice \udfff</p>",
+        b"<p>Invoice \xff</p>".decode("utf-8", "surrogateescape"),
+    ],
+    ids=["lone high surrogate", "lone low surrogate", "surrogateescape"],
+)
+def test_capture_from_html_refuses_text_that_cannot_be_encoded_as_utf8(html: str) -> None:
+    http_client, requests = _recording_http_client()
+    try:
+        client = ScreenshotScoutClient("key", http_client=http_client)
+        with pytest.raises(ScreenshotScoutSerializationError) as captured:
+            client.capture_from_html(html)
+    finally:
+        http_client.close()
+
+    assert requests == []
+    assert captured.value.option == "html"
+    assert str(captured.value) == "The HTML to capture must contain valid Unicode text."
+    assert isinstance(captured.value.__cause__, UnicodeEncodeError)
+
+
+@pytest.mark.parametrize("html", ["", " \n\t"])
+def test_capture_from_html_leaves_empty_html_to_the_api(html: str) -> None:
+    http_client, requests = _recording_http_client()
+    try:
+        client = ScreenshotScoutClient("key", http_client=http_client)
+        client.capture_from_html(html)
+    finally:
+        http_client.close()
+
+    assert _json_request_body(requests[0]) == {"html": html}
+
+
+def test_capture_options_cannot_carry_the_html_or_the_url() -> None:
+    @dataclass(slots=True, kw_only=True)
+    class OptionsWithTargets(CaptureOptions):
+        url: str | None = None
+        html: str | None = None
+
+    for name in ("html", "url"):
+        with pytest.raises(TypeError):
+            CaptureOptions(**cast(dict[str, Any], {name: "<p>Other</p>"}))
+
+    http_client, requests = _recording_http_client()
+    try:
+        client = ScreenshotScoutClient("key", http_client=http_client)
+        client.capture_from_html(
+            _INVOICE_HTML,
+            OptionsWithTargets(url="https://example.com", html="<p>Other</p>", full_page=False),
+        )
+        client.capture(
+            "https://example.com",
+            OptionsWithTargets(url="https://example.com/other", html="<p>Other</p>"),
+        )
+    finally:
+        http_client.close()
+
+    assert [_json_request_body(request) for request in requests] == [
+        {"html": _INVOICE_HTML, "full_page": False},
+        {"url": "https://example.com"},
+    ]
+
+
+def test_a_body_over_the_size_limit_arrives_as_an_api_error() -> None:
+    http_client, requests = _recording_http_client(_request_too_large_response)
+    try:
+        client = ScreenshotScoutClient("key", http_client=http_client)
+        with pytest.raises(ScreenshotScoutAPIError) as captured:
+            client.capture_from_html(_INVOICE_HTML)
+    finally:
+        http_client.close()
+
+    assert len(requests) == 1
+    error = captured.value
+    assert error.status == 413
+    assert error.error_code == "request_too_large"
+    assert error.error_message == "The request body must be at most 5 MB."
+    assert str(error) == "The request body must be at most 5 MB."
+    assert error.raw_response.content_type == "application/json"

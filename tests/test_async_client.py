@@ -9,15 +9,23 @@ import pytest
 
 from screenshotscout import (
     AsyncScreenshotScoutClient,
+    CaptureFormat,
     CaptureHTTPMethod,
     CaptureOptions,
+    CaptureResponseType,
     JsonCaptureResponse,
+    ScreenshotScoutAPIError,
     ScreenshotScoutConfigurationError,
     ScreenshotScoutTransportError,
 )
 
 # The same signing vector as in test_client.py, signed with ak_test and sk_test.
 _EXPECTED_SIGNATURE = "6419f2ac8c0440f1e341b547630606c9dc74dacfbb2df8e122fc9ae26831d893"
+
+_INVOICE_HTML = (
+    "<!doctype html>\n<html><head><title>Invoice #1042</title></head>"
+    '<body><h1>Invoice #1042 for Zoë & "Café"</h1></body></html>\n'
+)
 
 
 @pytest.mark.asyncio
@@ -428,3 +436,127 @@ async def test_injected_async_client_timeout_is_preserved() -> None:
         "write": 7.0,
         "pool": 7.0,
     }
+
+
+@pytest.mark.asyncio
+async def test_async_capture_from_html_sends_the_html_first_in_a_post_body() -> None:
+    requests: list[httpx.Request] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(
+            200,
+            json={"screenshot_url": "https://cdn.example/invoice.pdf"},
+            headers={"content-type": "application/json"},
+        )
+
+    html = f"  {_INVOICE_HTML}  "
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+        async with AsyncScreenshotScoutClient("ak_test", http_client=http_client) as client:
+            response = await client.capture_from_html(
+                html,
+                CaptureOptions(format=CaptureFormat.PDF, response_type=CaptureResponseType.JSON),
+            )
+        with pytest.raises(ScreenshotScoutConfigurationError, match="closed"):
+            await client.capture_from_html(html)
+
+    assert isinstance(response, JsonCaptureResponse)
+    assert response.result.screenshot_url == "https://cdn.example/invoice.pdf"
+    assert len(requests) == 1
+    request = requests[0]
+    assert request.method == "POST"
+    assert str(request.url) == "https://api.screenshotscout.com/v1/capture"
+    assert request.url.query == b""
+    assert request.headers["authorization"] == "Bearer ak_test"
+    assert request.headers["content-type"] == "application/json"
+    body: Any = json.loads(request.content)
+    assert list(body) == ["html", "format", "response_type"]
+    assert body == {"html": html, "format": "pdf", "response_type": "json"}
+
+
+@pytest.mark.asyncio
+async def test_async_capture_from_html_refuses_before_sending_when_the_client_has_a_secret_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requests: list[httpx.Request] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, content=b"%PDF", headers={"content-type": "application/pdf"})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+        async with AsyncScreenshotScoutClient(
+            "ak_test",
+            secret_key="sk_test",
+            http_client=http_client,
+        ) as client:
+            with pytest.raises(ScreenshotScoutConfigurationError) as passed:
+                await client.capture_from_html(_INVOICE_HTML)
+        monkeypatch.setenv("SCREENSHOTSCOUT_ACCESS_KEY", "ak_env")
+        monkeypatch.setenv("SCREENSHOTSCOUT_SECRET_KEY", "sk_env")
+        async with AsyncScreenshotScoutClient(http_client=http_client) as client:
+            with pytest.raises(ScreenshotScoutConfigurationError) as from_environment:
+                await client.capture_from_html(_INVOICE_HTML)
+
+    assert requests == []
+    assert str(passed.value) == (
+        "`capture_from_html` sends the HTML in a POST body, which can't be signed. This client "
+        "has a secret key: use a client without a secret key and an API key that doesn't "
+        "require signed requests."
+    )
+    assert str(from_environment.value) == (
+        "`capture_from_html` sends the HTML in a POST body, which can't be signed. This client "
+        "has a secret key from SCREENSHOTSCOUT_SECRET_KEY: use a client without a secret key "
+        "and an API key that doesn't require signed requests."
+    )
+
+
+@pytest.mark.asyncio
+async def test_async_body_over_the_size_limit_arrives_as_an_api_error() -> None:
+    requests: list[httpx.Request] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(
+            413,
+            content=(
+                b'{"error_code":"request_too_large",'
+                b'"error_message":"The request body must be at most 5 MB."}'
+            ),
+            headers={"content-type": "application/json"},
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+        async with AsyncScreenshotScoutClient("key", http_client=http_client) as client:
+            with pytest.raises(ScreenshotScoutAPIError) as captured:
+                await client.capture_from_html(_INVOICE_HTML)
+
+    assert len(requests) == 1
+    assert captured.value.status == 413
+    assert captured.value.error_code == "request_too_large"
+    assert captured.value.error_message == "The request body must be at most 5 MB."
+
+
+@pytest.mark.asyncio
+async def test_async_capture_from_html_cancellation_is_not_wrapped() -> None:
+    started = asyncio.Event()
+    never = asyncio.Event()
+    calls = 0
+
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        started.set()
+        await never.wait()
+        raise AssertionError("unreachable")
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+        client = AsyncScreenshotScoutClient("key", http_client=http_client)
+        task = asyncio.create_task(client.capture_from_html(_INVOICE_HTML))
+        await started.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        await client.aclose()
+
+    assert calls == 1

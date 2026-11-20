@@ -21,12 +21,14 @@ from ._response import (
     decode_success_response,
 )
 from ._serialization import (
+    SerializedCaptureOptions,
     WirePair,
     build_canonical_query,
     encode_json_body,
     encode_query_pairs,
     serialize_capture_method,
     serialize_capture_options,
+    serialize_html_capture_options,
 )
 from .errors import (
     ScreenshotScoutConfigurationError,
@@ -120,26 +122,23 @@ class ScreenshotScoutClient:
 
         self._ensure_open()
         prepared = _prepare_request(self._configuration, target_url, options, method)
-        try:
-            response = self._http_client.request(
-                prepared.method.value,
-                prepared.url,
-                headers=prepared.headers,
-                content=prepared.content,
-                follow_redirects=False,
-            )
-            body = response.read()
-        except Exception as cause:
-            error = ScreenshotScoutTransportError(
-                _transport_error_message(self._configuration),
-                cause,
-            )
-            raise error from cause
+        return self._send(prepared)
 
-        raw_response = create_raw_response(response, body)
-        if not 200 <= raw_response.status <= 299:
-            raise create_api_error(raw_response)
-        return decode_success_response(raw_response, prepared.expected_kind)
+    def capture_from_html(
+        self,
+        html: str,
+        options: CaptureOptions | None = None,
+    ) -> CaptureResponse:
+        """Capture ``html`` and return the buffered binary or JSON response.
+
+        Use it for an HTML document you generated, such as an invoice or a report. The HTML is
+        sent exactly as given, in a POST request. A client with a secret key refuses it, because
+        POST requests can't be signed.
+        """
+
+        self._ensure_open()
+        prepared = _prepare_html_request(self._configuration, html, options)
+        return self._send(prepared)
 
     def build_capture_url(
         self,
@@ -176,6 +175,28 @@ class ScreenshotScoutClient:
     def _ensure_open(self) -> None:
         if self._closed:
             raise ScreenshotScoutConfigurationError("This ScreenshotScoutClient is closed.")
+
+    def _send(self, prepared: _PreparedRequest) -> CaptureResponse:
+        try:
+            response = self._http_client.request(
+                prepared.method.value,
+                prepared.url,
+                headers=prepared.headers,
+                content=prepared.content,
+                follow_redirects=False,
+            )
+            body = response.read()
+        except Exception as cause:
+            error = ScreenshotScoutTransportError(
+                _transport_error_message(self._configuration),
+                cause,
+            )
+            raise error from cause
+
+        raw_response = create_raw_response(response, body)
+        if not 200 <= raw_response.status <= 299:
+            raise create_api_error(raw_response)
+        return decode_success_response(raw_response, prepared.expected_kind)
 
 
 class AsyncScreenshotScoutClient:
@@ -236,28 +257,23 @@ class AsyncScreenshotScoutClient:
 
         self._ensure_open()
         prepared = _prepare_request(self._configuration, target_url, options, method)
-        try:
-            response = await self._http_client.request(
-                prepared.method.value,
-                prepared.url,
-                headers=prepared.headers,
-                content=prepared.content,
-                follow_redirects=False,
-            )
-            body = await response.aread()
-        except asyncio.CancelledError:
-            raise
-        except Exception as cause:
-            error = ScreenshotScoutTransportError(
-                _transport_error_message(self._configuration),
-                cause,
-            )
-            raise error from cause
+        return await self._send(prepared)
 
-        raw_response = create_raw_response(response, body)
-        if not 200 <= raw_response.status <= 299:
-            raise create_api_error(raw_response)
-        return decode_success_response(raw_response, prepared.expected_kind)
+    async def capture_from_html(
+        self,
+        html: str,
+        options: CaptureOptions | None = None,
+    ) -> CaptureResponse:
+        """Await the final inline capture response for ``html``.
+
+        Use it for an HTML document you generated, such as an invoice or a report. The HTML is
+        sent exactly as given, in a POST request. A client with a secret key refuses it, because
+        POST requests can't be signed.
+        """
+
+        self._ensure_open()
+        prepared = _prepare_html_request(self._configuration, html, options)
+        return await self._send(prepared)
 
     def build_capture_url(
         self,
@@ -294,6 +310,30 @@ class AsyncScreenshotScoutClient:
     def _ensure_open(self) -> None:
         if self._closed:
             raise ScreenshotScoutConfigurationError("This AsyncScreenshotScoutClient is closed.")
+
+    async def _send(self, prepared: _PreparedRequest) -> CaptureResponse:
+        try:
+            response = await self._http_client.request(
+                prepared.method.value,
+                prepared.url,
+                headers=prepared.headers,
+                content=prepared.content,
+                follow_redirects=False,
+            )
+            body = await response.aread()
+        except asyncio.CancelledError:
+            raise
+        except Exception as cause:
+            error = ScreenshotScoutTransportError(
+                _transport_error_message(self._configuration),
+                cause,
+            )
+            raise error from cause
+
+        raw_response = create_raw_response(response, body)
+        if not 200 <= raw_response.status <= 299:
+            raise create_api_error(raw_response)
+        return decode_success_response(raw_response, prepared.expected_kind)
 
 
 def _build_configuration(
@@ -393,20 +433,48 @@ def _prepare_request(
         )
     capture_method = serialize_capture_method(method)
     if configuration.secret_key is not None and capture_method is CaptureHTTPMethod.POST:
-        source = (
-            f" from {_SECRET_KEY_VARIABLE}" if configuration.secret_key_from_environment else ""
-        )
+        source = _secret_key_source(configuration)
         raise ScreenshotScoutConfigurationError(
             f"POST requests can't be signed. This client has a secret key{source}: send this "
             "capture with method GET, or use a client without a secret key and an API key that "
             "doesn't require signed requests."
         )
-    signature = _create_signature(configuration, serialized.pairs)
+    return _build_prepared_request(configuration, serialized, capture_method, options)
+
+
+def _prepare_html_request(
+    configuration: _ClientConfiguration,
+    html: str,
+    options: CaptureOptions | None,
+) -> _PreparedRequest:
+    serialized = serialize_html_capture_options(html, options)
+    # HTML only travels in a POST body, and a client with a secret key only sends signed requests.
+    if configuration.secret_key is not None:
+        source = _secret_key_source(configuration)
+        raise ScreenshotScoutConfigurationError(
+            "`capture_from_html` sends the HTML in a POST body, which can't be signed. This "
+            f"client has a secret key{source}: use a client without a secret key and an API key "
+            "that doesn't require signed requests."
+        )
+    return _build_prepared_request(configuration, serialized, CaptureHTTPMethod.POST, options)
+
+
+def _secret_key_source(configuration: _ClientConfiguration) -> str:
+    return f" from {_SECRET_KEY_VARIABLE}" if configuration.secret_key_from_environment else ""
+
+
+def _build_prepared_request(
+    configuration: _ClientConfiguration,
+    serialized: SerializedCaptureOptions,
+    capture_method: CaptureHTTPMethod,
+    options: CaptureOptions | None,
+) -> _PreparedRequest:
     headers: dict[str, str] = {
         "Authorization": f"Bearer {configuration.access_key}",
     }
 
     if capture_method is CaptureHTTPMethod.GET:
+        signature = _create_signature(configuration, serialized.pairs)
         pairs = list(serialized.pairs)
         if signature is not None:
             pairs.append(("signature", signature))

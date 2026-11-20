@@ -29,3 +29,15 @@ def test_client_configuration_surface_is_fixed() -> None:
         assert signature(client_class).parameters["access_key"].default is None
     assert "RequestTimeout" not in screenshotscout.__all__
     assert not hasattr(screenshotscout, "RequestTimeout")
+
+
+def test_capture_from_html_takes_the_html_and_options_but_no_method() -> None:
+    import screenshotscout
+
+    for client_class in (
+        screenshotscout.ScreenshotScoutClient,
+        screenshotscout.AsyncScreenshotScoutClient,
+    ):
+        parameters = signature(client_class.capture_from_html).parameters
+        assert tuple(parameters) == ("self", "html", "options")
+        assert parameters["options"].default is None
